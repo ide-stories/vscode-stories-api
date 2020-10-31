@@ -21,9 +21,10 @@ import LRU from "lru-cache";
 const main = async () => {
   const prodCredentials = __prod__
     ? {
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT),
         username: process.env.DB_USER,
         password: process.env.DB_PASSWORD,
-        host: process.env.DB_HOST,
       }
     : {};
   console.log("about to connect to db, host: ", process.env.DB_HOST);
