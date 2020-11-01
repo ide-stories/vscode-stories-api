@@ -164,9 +164,15 @@ const main = async () => {
 
     if (
       typeof flair !== "string" ||
-      !["vanilla js", "flutter", "react", "vue", "angular", "python"].includes(
-        flair
-      )
+      ![
+        "vanilla js",
+        "flutter",
+        "react",
+        "vue",
+        "angular",
+        "python",
+        "dart",
+      ].includes(flair)
     ) {
       flair = "vanilla js";
     }
