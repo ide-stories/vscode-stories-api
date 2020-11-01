@@ -173,11 +173,12 @@ const main = async () => {
         "python",
         "dart",
         "java",
+        "c",
         "cpp",
+        "cSharp",
         "kotlin",
         "go",
         "swift",
-        "cSharp",
       ].includes(flair)
     ) {
       flair = "vanilla js";
