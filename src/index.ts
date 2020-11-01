@@ -167,15 +167,19 @@ const main = async () => {
       headers: false,
     }),
     async (req, res) => {
-      let { text, programmingLanguageId } = req.body;
+      let { text, programmingLanguageId, filename } = req.body;
       if (text.length > maxTextLength) {
         text = text.slice(0, maxTextLength);
       }
       if (programmingLanguageId.length > 40) {
         programmingLanguageId = null;
       }
+      if (filename.length > 100) {
+        filename = "untitled";
+      }
       const ts = await TextStory.create({
         text,
+        filename,
         programmingLanguageId,
         creatorId: (req as any).userId,
       }).save();

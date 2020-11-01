@@ -17,6 +17,9 @@ export class TextStory extends BaseEntity {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
+  @Column("text", { default: "untitled" })
+  filename: string;
+
   @Column("text")
   text: string;
 
