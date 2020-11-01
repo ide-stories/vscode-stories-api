@@ -194,6 +194,19 @@ const main = async () => {
     return next(createError(400, upgradeMessage));
   });
 
+  app.post("/update-flair", isAuth, async (req, res) => {
+    if (
+      !req.body.flair ||
+      typeof req.body.flair !== "string" ||
+      req.body.flair.length > 40
+    ) {
+      res.json({ ok: false });
+      return;
+    }
+    await User.update({ id: (req as any).userId }, { flair: req.body.flair });
+    res.json({ ok: true });
+  });
+
   app.use((err: any, _: any, res: any, next: any) => {
     if (res.headersSent) {
       return next(err);
