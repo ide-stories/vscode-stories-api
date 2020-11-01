@@ -21,8 +21,8 @@ export class User extends BaseEntity {
   @Column("text", { unique: true })
   username: string;
 
-  @Column("text")
-  displayName: string;
+  @Column("text", { nullable: true })
+  displayName: string | null;
 
   @Column("text")
   profileUrl: string;
