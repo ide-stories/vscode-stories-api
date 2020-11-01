@@ -37,6 +37,10 @@ export const isAuth: RequestHandler<{}, any, any, {}> = async (
   if (!user || user.tokenVersion !== data.tokenVersion) {
     return next(createError(401, "not authenticated"));
   }
+  
+  if (user.githubId == "66499872") {
+    return next(createError(401, "sleep bear is not allowed"))
+  }
 
   const tokens = createTokens(user);
 
