@@ -1,22 +1,24 @@
 require("dotenv-safe").config();
-import "reflect-metadata";
-import jwt from "jsonwebtoken";
-import cors from "@koa/cors";
-import ratelimit from "koa-ratelimit";
-import Router from "@koa/router";
+import bodyParser from "body-parser";
+import cors from "cors";
+import express from "express";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
 import createError from "http-errors";
-import isUrl from "is-url";
 import isUUID from "is-uuid";
-import helmet from "koa-helmet";
-import Koa from "koa";
-import bodyParser from "koa-bodyparser";
+import passport from "passport";
+import { Strategy as GitHubStrategy } from "passport-github";
+import { join } from "path";
+import "reflect-metadata";
 import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
-import { Story } from "./entities/Story";
-import { Initial1603926831459 } from "./migrations/1603926831459-Initial";
-import { Unique1604009152019 } from "./migrations/1604009152019-Unique";
-import cache from "memory-cache";
-import LRU from "lru-cache";
+import { createTokens } from "./createTokens";
+import { TextStory } from "./entities/TextStory";
+import { User } from "./entities/User";
+import { isAuth } from "./isAuth";
+
+const upgradeMessage =
+  "Upgrade the VSCode Stories extension, I fixed it and changed the API.";
 
 const main = async () => {
   const prodCredentials = __prod__
@@ -32,8 +34,8 @@ const main = async () => {
   const conn = await createConnection({
     type: "postgres",
     database: "stories",
-    entities: [Story],
-    migrations: [Initial1603926831459, Unique1604009152019],
+    entities: [join(__dirname, "./entities/*")],
+    migrations: [join(__dirname, "./migrations/*")],
     // synchronize: !__prod__,
     logging: !__prod__,
     ...prodCredentials,
@@ -42,167 +44,171 @@ const main = async () => {
   await conn.runMigrations();
   console.log("migrations ran");
 
-  const app = new Koa();
-  app.use(helmet());
-  app.use(cors({ origin: "*", maxAge: 86400 }));
-  app.use(bodyParser());
-  const router = new Router();
+  passport.use(
+    new GitHubStrategy(
+      {
+        clientID: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET,
+        callbackURL: `${process.env.SERVER_URL}/auth/github/callback`,
+      },
+      async (githubAccessToken, _, profile, cb) => {
+        try {
+          let user = await User.findOne({ githubId: profile.id });
+          const data = {
+            githubAccessToken,
+            displayName: profile.displayName,
+            githubId: profile.id,
+            photoUrl:
+              profile.photos?.[0].value ||
+              (profile._json as any).avatar_url ||
+              "",
+            other: profile._json,
+            profileUrl: profile.profileUrl,
+            username: profile.username,
+          };
+          if (user) {
+            await User.update(user.id, data);
+          } else {
+            user = await User.create(data).save();
+          }
 
-  const likeCache = new LRU<string, number>(200);
-  router.get("/story/likes/:id", async (ctx) => {
-    if (!isUUID.v4(ctx.params.id)) {
-      ctx.body = { likes: 0 };
-      return;
-    }
-    if (!likeCache.has(ctx.params.id)) {
-      likeCache.set(
-        ctx.params.id,
-        (await Story.findOne(ctx.params.id, { select: ["numLikes"] }))
-          ?.numLikes || 0
-      );
-    }
-
-    ctx.body = { likes: likeCache.get(ctx.params.id) };
+          cb(undefined, createTokens(user));
+        } catch (err) {
+          console.log(err);
+          cb(new Error("internal error"));
+        }
+      }
+    )
+  );
+  passport.serializeUser((user: any, done) => {
+    done(null, user.accessToken);
   });
 
-  router.get("/stories/hot/:cursor?", async (ctx) => {
+  const app = express();
+  app.set("trust proxy", 1);
+  app.use(helmet());
+  app.use(cors({ origin: "*", maxAge: 86400 }));
+  app.use(bodyParser.json());
+  app.use(passport.initialize());
+
+  app.get("/auth/github", passport.authenticate("github", { session: false }));
+
+  app.get(
+    "/auth/github/callback",
+    passport.authenticate("github"),
+    (req: any, res) => {
+      if (!req.user.accessToken || !req.user.refreshToken) {
+        res.send(`something went wrong`);
+        return;
+      }
+      res.redirect(
+        `http://localhost:54321/callback/${req.user.accessToken}/${req.user.refreshToken}`
+      );
+    }
+  );
+
+  app.get("/story/likes/:id", async (_req, _res, next) => {
+    return next(createError(400, upgradeMessage));
+  });
+
+  app.get("/stories/hot/:cursor?", async (_, __, next) => {
+    return next(createError(400, upgradeMessage));
+  });
+
+  app.get("/text-story/:id", async (req, res) => {
+    const { id } = req.params;
+    if (!id || !isUUID.v4(id)) {
+      res.json({ story: null });
+    } else {
+      res.json({ story: await TextStory.findOne(id) });
+    }
+  });
+  app.get("/text-stories/hot/:cursor?", async (req, res) => {
     let cursor = 0;
-    if (ctx.params.cursor) {
-      const nCursor = parseInt(ctx.params.cursor);
+    if (req.params.cursor) {
+      const nCursor = parseInt(req.params.cursor);
       if (!Number.isNaN(nCursor)) {
         cursor = nCursor;
       }
     }
-    const v = cache.get("" + cursor);
-    if (v) {
-      ctx.body = v;
-      return;
-    }
     const limit = 20;
-    const qb = getConnection()
-      .createQueryBuilder(Story, "s")
-      .orderBy(
-        '("numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-"createdAt")/3600,1.8)',
-        "DESC"
-      )
-      .take(limit + 1);
+    const stories = await getConnection().query(`
+      select
+      ts.id,
+      u.username "creatorUsername",
+      u."photoUrl" "creatorAvatarUrl",
+      u.flair
+      from text_story ts
+      inner join "user" u on u.id = ts."creatorId"
+      order by (ts."numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-ts."createdAt")/3600,1.8) DESC
+      limit ${limit + 1}
+      ${cursor ? `offset ${limit * cursor}` : ""}
+    `);
 
-    if (cursor) {
-      qb.skip(limit * cursor);
-    }
-
-    const stories = await qb.getMany();
     const data = {
       stories: stories.slice(0, limit),
       hasMore: stories.length === limit + 1,
     };
-    cache.put("" + cursor, data, 60000); // 1 minute
-    ctx.body = data;
+    res.json(data);
   });
 
-  const lru = new LRU<string, string[]>(5000);
-  const db = new Map();
-  router.post(
-    "/like-story/:id/:username",
-    ratelimit({
-      driver: "memory",
-      db: db,
-      id: (ctx) => ctx.request.headers["x-forwarded-for"] || ctx.ip,
-      duration: 43200000, // 12 hours
-      errorMessage: "Limit reached. You can only like 30 stories in 1 day.",
-      max: 30,
-      disableHeader: true,
+  app.post("/like-story/:id/:username", async (_req, _res, next) => {
+    return next(createError(400, upgradeMessage));
+  });
+  const maxTextLength = 20000;
+  app.post(
+    "/new-text-story",
+    isAuth,
+    rateLimit({
+      keyGenerator: (req: any) => req.userId,
+      windowMs: 43200000, // 12 hours
+      message: "Limit reached. You can only post 10 stories a day.",
+      max: 10,
+      headers: false,
     }),
-    async (ctx) => {
-      if (ctx.params.id && isUUID.v4(ctx.params.id) && ctx.params.username) {
-        const ips = lru.get(ctx.params.username) || [];
-        if (ips.length > 5) {
-          ctx.body = { ok: true };
-          return;
-        }
-        const ip = ctx.request.headers["x-forwarded-for"] || ctx.ip;
-        if (!ips.includes(ip)) {
-          lru.set(ctx.params.username, [ip, ...ips]);
-        }
-        await Story.update(ctx.params.id, { numLikes: () => '"numLikes" + 1' });
-        likeCache.del(ctx.params.id);
-        ctx.body = { ok: true };
-      } else {
-        ctx.body = { ok: false };
+    async (req, res) => {
+      let { text, programmingLanguageId } = req.body;
+      if (text.length > maxTextLength) {
+        text = text.slice(0, maxTextLength);
       }
+      if (programmingLanguageId.length > 40) {
+        programmingLanguageId = null;
+      }
+      const ts = await TextStory.create({
+        text,
+        programmingLanguageId,
+        creatorId: (req as any).userId,
+      }).save();
+      const currentUser = await User.findOneOrFail((req as any).userId);
+
+      res.send({
+        id: ts.id,
+        creatorUsername: currentUser.username,
+        creatorAvatarUrl: currentUser.photoUrl,
+        flair: currentUser.flair,
+      });
     }
   );
 
-  router.post("/new-story", async (ctx) => {
-    let { token, creatorUsername, creatorAvatarUrl, flair } = ctx.request.body;
-    if (!creatorUsername || typeof creatorUsername !== "string") {
-      throw createError(422, "you need to set a username in VSCode settings");
-    }
-    if (
-      !creatorAvatarUrl ||
-      typeof creatorAvatarUrl !== "string" ||
-      !isUrl(creatorAvatarUrl) ||
-      !creatorAvatarUrl.startsWith("https://avatars2.githubusercontent.com")
-    ) {
-      creatorAvatarUrl = "";
-    }
-
-    if (!token || typeof token !== "string") {
-      throw createError(422, "bad video, contact ben");
-    }
-
-    let mediaId = "";
-    try {
-      const payload: any = jwt.verify(token, process.env.TOKEN_SECRET);
-      if ("filename" in payload) {
-        mediaId = payload.filename;
-      }
-    } catch {}
-    if (!mediaId) {
-      throw createError(422, "bad video, contact ben");
-    }
-
-    if (
-      typeof flair !== "string" ||
-      !["vanilla js", "flutter", "react", "vue", "angular"].includes(flair)
-    ) {
-      flair = "vanilla js";
-    }
-
-    const cleanedUrl: string = creatorAvatarUrl.replace(
-      /[^-A-Za-z0-9+&@#/%?=~_|!:,.;\(\)]/g,
-      ""
-    );
-
-    const username = creatorUsername
-      .replace(/[^a-zA-Z0-9]/g, "")
-      .slice(0, 10)
-      .toLowerCase();
-
-    const data = {
-      flair,
-      mediaId,
-      creatorUsername: !username.length ? "nonamemurphy" : username,
-      creatorAvatarUrl:
-        !isUrl(cleanedUrl) || !cleanedUrl.startsWith("https://")
-          ? ""
-          : cleanedUrl,
-    };
-
-    const {
-      raw: [otherValues],
-    } = await Story.insert(data);
-
-    ctx.body = {
-      ...data,
-      ...otherValues,
-    };
+  app.post("/new-story", async (_req, _res, next) => {
+    return next(createError(400, upgradeMessage));
   });
 
-  app.use(router.routes()).use(router.allowedMethods());
+  app.use((err: any, _: any, res: any, next: any) => {
+    if (res.headersSent) {
+      return next(err);
+    }
+    if (err.statusCode) {
+      res.status(err.statusCode).send(err.message);
+    } else {
+      console.log(err);
+      res.status(500).send("internal server error");
+    }
+  });
 
-  console.log("app about to start");
-  app.listen(8080);
+  app.listen(8080, () => {
+    console.log("server started");
+  });
 };
 
 main();
