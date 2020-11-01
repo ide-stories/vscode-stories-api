@@ -131,7 +131,7 @@ const main = async () => {
         cursor = nCursor;
       }
     }
-    const limit = 20;
+    const limit = 21;
     const stories = await getConnection().query(`
       select
       ts.id,
