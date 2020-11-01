@@ -176,6 +176,7 @@ const main = async () => {
         "cpp",
         "kotlin",
         "go",
+        "swift",
       ].includes(flair)
     ) {
       flair = "vanilla js";
