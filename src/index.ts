@@ -172,6 +172,7 @@ const main = async () => {
         "angular",
         "python",
         "dart",
+        "java",
       ].includes(flair)
     ) {
       flair = "vanilla js";
