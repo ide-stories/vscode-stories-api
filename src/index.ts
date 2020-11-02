@@ -177,13 +177,13 @@ const main = async () => {
       return;
     }
 
-    await TextStory.delete({
-      id,
-      creatorId:
-        req.userId === "dac7eb0f-808b-4842-b193-5d68cc082609"
-          ? undefined
-          : req.userId,
-    });
+    const criteria: Partial<TextStory> = { id };
+
+    if (req.userId !== "dac7eb0f-808b-4842-b193-5d68cc082609") {
+      criteria.creatorId = req.userId;
+    }
+
+    await TextStory.delete(criteria);
     res.send({ ok: true });
   });
 
