@@ -13,6 +13,7 @@ import "reflect-metadata";
 import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
+import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
@@ -115,12 +116,29 @@ const main = async () => {
     return next(createError(400, upgradeMessage));
   });
 
-  app.get("/text-story/:id", async (req, res) => {
+  app.get("/text-story/:id", isAuth(false), async (req: any, res) => {
     const { id } = req.params;
     if (!id || !isUUID.v4(id)) {
       res.json({ story: null });
     } else {
-      res.json({ story: await TextStory.findOne(id) });
+      const replacements = [id];
+      if (req.userId) {
+        replacements.push(req.userId);
+      }
+      res.json({
+        story: (
+          await getConnection().query(
+            `
+      select ts.*, l."textStoryId" is not null "hasLiked" from text_story ts
+      left join "like" l on l."textStoryId" = ts.id ${
+        req.userId ? `and l."userId" = $2` : ""
+      }
+      where id = $1
+      `,
+            replacements
+          )
+        )[0],
+      });
     }
   });
   app.get("/text-stories/hot/:cursor?", async (req, res) => {
@@ -152,13 +170,48 @@ const main = async () => {
     res.json(data);
   });
 
+  app.post("/delete-text-story/:id", isAuth(), async (req: any, res) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+
+    await TextStory.delete({
+      id,
+      creatorId:
+        req.userId === "dac7eb0f-808b-4842-b193-5d68cc082609"
+          ? undefined
+          : req.userId,
+    });
+    res.send({ ok: true });
+  });
+
+  app.post("/like-text-story/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Like.insert({ textStoryId: id, userId: req.userId });
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "You probably already liked this"));
+    }
+
+    await TextStory.update(id, { numLikes: () => '"numLikes" + 1' });
+
+    res.send({ ok: true });
+  });
+
   app.post("/like-story/:id/:username", async (_req, _res, next) => {
     return next(createError(400, upgradeMessage));
   });
   const maxTextLength = 20000;
   app.post(
     "/new-text-story",
-    isAuth,
+    isAuth(),
     rateLimit({
       keyGenerator: (req: any) => req.userId,
       windowMs: 43200000, // 12 hours
@@ -167,7 +220,7 @@ const main = async () => {
       headers: false,
     }),
     async (req, res) => {
-      let { text, programmingLanguageId, filename } = req.body;
+      let { text, programmingLanguageId, filename, recordingSteps } = req.body;
       if (text.length > maxTextLength) {
         text = text.slice(0, maxTextLength);
       }
@@ -180,6 +233,7 @@ const main = async () => {
       const ts = await TextStory.create({
         text,
         filename,
+        recordingSteps,
         programmingLanguageId,
         creatorId: (req as any).userId,
       }).save();
@@ -198,7 +252,7 @@ const main = async () => {
     return next(createError(400, upgradeMessage));
   });
 
-  app.post("/update-flair", isAuth, async (req, res) => {
+  app.post("/update-flair", isAuth(), async (req, res) => {
     if (
       !req.body.flair ||
       typeof req.body.flair !== "string" ||

@@ -20,6 +20,9 @@ export class TextStory extends BaseEntity {
   @Column("text", { default: "untitled" })
   filename: string;
 
+  @Column("jsonb", { nullable: true })
+  recordingSteps: any;
+
   @Column("text")
   text: string;
 
@@ -32,7 +35,7 @@ export class TextStory extends BaseEntity {
   @Column("text")
   creatorId: string;
 
-  @ManyToOne(() => User, (u) => u.textStories)
+  @ManyToOne(() => User, (u) => u.textStories, { onDelete: "CASCADE" })
   @JoinColumn({ name: "creatorId" })
   creator: Promise<User>;
 

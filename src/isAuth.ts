@@ -4,14 +4,14 @@ import createError from "http-errors";
 import { User } from "./entities/User";
 import { createTokens } from "./createTokens";
 
-export const isAuth: RequestHandler<{}, any, any, {}> = async (
-  req,
-  res,
-  next
-) => {
+export const isAuth: (st?: boolean) => RequestHandler<{}, any, any, {}> = (
+  shouldThrow = true
+) => async (req, res, next) => {
   const accessToken = req.headers["access-token"];
   if (!accessToken || typeof accessToken !== "string") {
-    return next(createError(401, "not authenticated"));
+    return next(
+      !shouldThrow ? undefined : createError(401, "not authenticated")
+    );
   }
 
   try {
@@ -22,20 +22,26 @@ export const isAuth: RequestHandler<{}, any, any, {}> = async (
 
   const refreshToken = req.headers["refresh-token"];
   if (!refreshToken || typeof refreshToken !== "string") {
-    return next(createError(401, "not authenticated"));
+    return next(
+      !shouldThrow ? undefined : createError(401, "not authenticated")
+    );
   }
 
   let data;
   try {
     data = verify(refreshToken, process.env.REFRESH_TOKEN_SECRET) as any;
   } catch {
-    return next(createError(401, "not authenticated"));
+    return next(
+      !shouldThrow ? undefined : createError(401, "not authenticated")
+    );
   }
 
   const user = await User.findOne(data.userId);
   // token has been invalidated or user deleted
   if (!user || user.tokenVersion !== data.tokenVersion) {
-    return next(createError(401, "not authenticated"));
+    return next(
+      !shouldThrow ? undefined : createError(401, "not authenticated")
+    );
   }
 
   const tokens = createTokens(user);
