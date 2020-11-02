@@ -187,7 +187,7 @@ const main = async () => {
       u.flair
       from text_story ts
       inner join "user" u on u.id = ts."creatorId"
-      where u.username LIKE $1
+      where u.username ILIKE %$1%
       order by (ts."numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-ts."createdAt")/3600,1.8) DESC
       limit ${limit + 1}
       ${cursor ? `offset ${limit * cursor}` : ""}
