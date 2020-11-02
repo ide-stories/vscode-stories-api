@@ -170,6 +170,36 @@ const main = async () => {
     res.json(data);
   });
 
+  app.get("/text-stories/search/:cursor/:searchInput", async (req, res) => {
+    let cursor = 0;
+    const nCursor = parseInt(req.params.cursor);
+    if (!Number.isNaN(nCursor)) {
+      cursor = nCursor;
+    }
+
+    let searchInput = req.params.searchInput;
+    const limit = 21;
+    const stories = await getConnection().query(`
+      select
+      ts.id,
+      u.username "creatorUsername",
+      u."photoUrl" "creatorAvatarUrl",
+      u.flair
+      from text_story ts
+      inner join "user" u on u.id = ts."creatorId"
+      where u.username LIKE $1
+      order by (ts."numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-ts."createdAt")/3600,1.8) DESC
+      limit ${limit + 1}
+      ${cursor ? `offset ${limit * cursor}` : ""}
+    `, [searchInput]);
+
+    const data = {
+      stories: stories.slice(0, limit),
+      hasMore: stories.length === limit + 1,
+    };
+    res.json(data);
+  });
+
   app.post("/delete-text-story/:id", isAuth(), async (req: any, res) => {
     const { id } = req.params;
     if (!isUUID.v4(id)) {
