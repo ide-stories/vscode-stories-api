@@ -7,6 +7,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from "typeorm";
+import { Favorite } from "./Favorite";
+import { GifStory } from "./GifStory";
 import { Like } from "./Like";
 import { TextStory } from "./TextStory";
 
@@ -42,8 +44,14 @@ export class User extends BaseEntity {
   @Column("int", { default: 1 })
   tokenVersion: number;
 
+  @OneToMany(() => GifStory, (s) => s.creator)
+  gifStories: Promise<User>;
+
   @OneToMany(() => TextStory, (s) => s.creator)
   textStories: Promise<User>;
+
+  @OneToMany(() => Favorite, (s) => s.user)
+  favorites: Promise<Favorite>;
 
   @OneToMany(() => Like, (s) => s.user)
   likes: Promise<Like>;

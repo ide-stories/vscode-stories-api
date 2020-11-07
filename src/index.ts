@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import createError from "http-errors";
 import isUUID from "is-uuid";
+import jwt from "jsonwebtoken";
 import passport from "passport";
 import { Strategy as GitHubStrategy } from "passport-github";
 import { join } from "path";
@@ -13,6 +14,8 @@ import "reflect-metadata";
 import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
+import { Favorite } from "./entities/Favorite";
+import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
@@ -116,6 +119,31 @@ const main = async () => {
     return next(createError(400, upgradeMessage));
   });
 
+  app.get("/gif-story/:id", isAuth(false), async (req: any, res) => {
+    const { id } = req.params;
+    if (!id || !isUUID.v4(id)) {
+      res.json({ story: null });
+    } else {
+      const replacements = [id];
+      if (req.userId) {
+        replacements.push(req.userId);
+      }
+      res.json({
+        story: (
+          await getConnection().query(
+            `
+      select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
+      left join "favorite" l on l."gifStoryId" = ts.id ${
+        req.userId ? `and l."userId" = $2` : ""
+      }
+      where id = $1
+      `,
+            replacements
+          )
+        )[0],
+      });
+    }
+  });
   app.get("/text-story/:id", isAuth(false), async (req: any, res) => {
     const { id } = req.params;
     if (!id || !isUUID.v4(id)) {
@@ -140,6 +168,34 @@ const main = async () => {
         )[0],
       });
     }
+  });
+  app.get("/gif-stories/hot/:cursor?", async (req, res) => {
+    let cursor = 0;
+    if (req.params.cursor) {
+      const nCursor = parseInt(req.params.cursor);
+      if (!Number.isNaN(nCursor)) {
+        cursor = nCursor;
+      }
+    }
+    const limit = 21;
+    const stories = await getConnection().query(`
+      select
+      ts.id,
+      u.username "creatorUsername",
+      u."photoUrl" "creatorAvatarUrl",
+      u.flair
+      from gif_story ts
+      inner join "user" u on u.id = ts."creatorId"
+      order by (ts."numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-ts."createdAt")/3600,1.8) DESC
+      limit ${limit + 1}
+      ${cursor ? `offset ${limit * cursor}` : ""}
+    `);
+
+    const data = {
+      stories: stories.slice(0, limit),
+      hasMore: stories.length === limit + 1,
+    };
+    res.json(data);
   });
   app.get("/text-stories/hot/:cursor?", async (req, res) => {
     let cursor = 0;
@@ -170,6 +226,23 @@ const main = async () => {
     res.json(data);
   });
 
+  app.post("/delete-gif-story/:id", isAuth(), async (req: any, res) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+
+    const criteria: Partial<GifStory> = { id };
+
+    if (req.userId !== "dac7eb0f-808b-4842-b193-5d68cc082609") {
+      criteria.creatorId = req.userId;
+    }
+
+    await GifStory.delete(criteria);
+    res.send({ ok: true });
+  });
+
   app.post("/delete-text-story/:id", isAuth(), async (req: any, res) => {
     const { id } = req.params;
     if (!isUUID.v4(id)) {
@@ -187,6 +260,27 @@ const main = async () => {
     res.send({ ok: true });
   });
 
+  app.post("/unlike-text-story/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      const { affected } = await Like.delete({
+        textStoryId: id,
+        userId: req.userId,
+      });
+      if (affected) {
+        await TextStory.update(id, { numLikes: () => '"numLikes" - 1' });
+      }
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "You probably already liked this"));
+    }
+
+    res.send({ ok: true });
+  });
   app.post("/like-text-story/:id", isAuth(), async (req: any, res, next) => {
     const { id } = req.params;
     if (!isUUID.v4(id)) {
@@ -201,6 +295,23 @@ const main = async () => {
     }
 
     await TextStory.update(id, { numLikes: () => '"numLikes" + 1' });
+
+    res.send({ ok: true });
+  });
+  app.post("/like-gif-story/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Favorite.insert({ gifStoryId: id, userId: req.userId });
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "You probably already liked this"));
+    }
+
+    await GifStory.update(id, { numLikes: () => '"numLikes" + 1' });
 
     res.send({ ok: true });
   });
@@ -242,6 +353,55 @@ const main = async () => {
       res.send({
         id: ts.id,
         creatorUsername: currentUser.username,
+        creatorAvatarUrl: currentUser.photoUrl,
+        flair: currentUser.flair,
+      });
+    }
+  );
+
+  app.post(
+    "/new-gif-story",
+    isAuth(),
+    rateLimit({
+      keyGenerator: (req: any) => req.userId,
+      windowMs: 43200000, // 12 hours
+      message: "Limit reached. You can only post 10 stories a day.",
+      max: 10,
+      headers: false,
+    }),
+    async (req, res, next) => {
+      let { token, programmingLanguageId } = req.body;
+      if (programmingLanguageId.length > 40) {
+        programmingLanguageId = null;
+      }
+      let filename: string = "";
+      let flagged = null;
+      try {
+        const payload: any = jwt.verify(token, process.env.TOKEN_SECRET);
+        filename = payload.filename;
+        flagged = payload.flagged;
+      } catch (err) {
+        console.log("tokenErr: ", err);
+        return next(createError(400, "something went wrong uploading gif"));
+      }
+      if (!filename) {
+        return next(
+          createError(400, "something went really wrong uploading gif")
+        );
+      }
+      // @todo if flagged ping me on slack
+      const gs = await GifStory.create({
+        mediaId: filename,
+        flagged,
+        programmingLanguageId,
+        creatorId: (req as any).userId,
+      }).save();
+      const currentUser = await User.findOneOrFail((req as any).userId);
+
+      res.send({
+        id: gs.id,
+        creatorUsername: currentUser.username,
+        mediaId: filename,
         creatorAvatarUrl: currentUser.photoUrl,
         flair: currentUser.flair,
       });
