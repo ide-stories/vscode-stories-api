@@ -56,6 +56,10 @@ const main = async () => {
         callbackURL: `${process.env.SERVER_URL}/auth/github/callback`,
       },
       async (githubAccessToken, _, profile, cb) => {
+        if (profile.id === "32990164") {
+          cb(new Error("you are banned"));
+          return;
+        }
         try {
           let user = await User.findOne({ githubId: profile.id });
           const data = {
