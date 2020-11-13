@@ -25,14 +25,13 @@ const upgradeMessage =
   "Upgrade the VSCode Stories extension, I fixed it and changed the API.";
 
 const main = async () => {
-  const prodCredentials = __prod__
-    ? {
+  const credentials = 
+    {
         host: process.env.DB_HOST,
         port: Number(process.env.DB_PORT),
         username: process.env.DB_USER,
         password: process.env.DB_PASSWORD,
-      }
-    : {};
+    };
   console.log("about to connect to db, host: ", process.env.DB_HOST);
 
   const conn = await createConnection({
@@ -42,7 +41,7 @@ const main = async () => {
     migrations: [join(__dirname, "./migrations/*")],
     // synchronize: !__prod__,
     logging: !__prod__,
-    ...prodCredentials,
+    ...credentials,
   });
   console.log("connected, running migrations now");
   await conn.runMigrations();

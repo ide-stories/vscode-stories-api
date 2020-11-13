@@ -3,3 +3,4 @@ dist
 .env
 .vscode
 .deployment
+package-lock.json
