@@ -15,6 +15,7 @@ import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
+import { Friend } from "./entities/Friend";
 import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
@@ -27,11 +28,11 @@ const upgradeMessage =
 const main = async () => {
   const prodCredentials = __prod__
     ? {
-        host: process.env.DB_HOST,
-        port: Number(process.env.DB_PORT),
-        username: process.env.DB_USER,
-        password: process.env.DB_PASSWORD,
-      }
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT),
+      username: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+    }
     : {};
   console.log("about to connect to db, host: ", process.env.DB_HOST);
 
@@ -133,9 +134,8 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
-      left join "favorite" l on l."gifStoryId" = ts.id ${
-        req.userId ? `and l."userId" = $2` : ""
-      }
+      left join "favorite" l on l."gifStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
+            }
       where id = $1
       `,
             replacements
@@ -158,11 +158,33 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."textStoryId" is not null "hasLiked" from text_story ts
-      left join "like" l on l."textStoryId" = ts.id ${
-        req.userId ? `and l."userId" = $2` : ""
-      }
+      left join "like" l on l."textStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
+            }
       where id = $1
       `,
+            replacements
+          )
+        )[0],
+      });
+    }
+  });
+  app.get("/is-friend/:id", isAuth(false), async (req: any, res) => {
+    const { id } = req.params;
+    if (!id || !isUUID.v4(id)) {
+      res.json({ friends: null });
+    } else {
+      const replacements = [id];
+      if (req.userId) {
+        replacements.push(req.userId);
+      }
+      res.json({
+        isFriend: (
+          await getConnection().query(
+            `
+            select * from friend f
+            where f."userId" = $2
+            and f."friendsUserId" = $1
+            `,
             replacements
           )
         )[0],
@@ -209,6 +231,7 @@ const main = async () => {
     const stories = await getConnection().query(`
       select
       ts.id,
+      ts."creatorId",
       u.username "creatorUsername",
       u."photoUrl" "creatorAvatarUrl",
       u.flair
@@ -257,6 +280,40 @@ const main = async () => {
     }
 
     await TextStory.delete(criteria);
+    res.send({ ok: true });
+  });
+
+  app.post("/remove-friend/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Friend.delete({
+        userId: req.userId,
+        friendsUserId: id,
+      })
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "It's probably already your friend"));
+    }
+
+    res.send({ ok: true });
+  });
+  app.post("/add-friend/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Friend.insert({ userId: req.userId, friendsUserId: id });
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "It's probably already your friend"));
+    }
+
     res.send({ ok: true });
   });
 
