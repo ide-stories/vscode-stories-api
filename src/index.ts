@@ -27,7 +27,7 @@ const upgradeMessage =
 const main = async () => {
   const prodCredentials = __prod__
     ? {
-        host: process.env.DB_HOST,
+        host: process.env.SOCKET_PATH ? process.env.SOCKET_PATH : process.env.DB_HOST,
         port: Number(process.env.DB_PORT),
         username: process.env.DB_USER,
         password: process.env.DB_PASSWORD,
@@ -441,7 +441,7 @@ const main = async () => {
     }
   });
 
-  app.listen(8080, () => {
+  app.listen((process.env.PORT || 8080), () => {
     console.log("server started");
   });
 };

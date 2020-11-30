@@ -1,6 +1,6 @@
 # vscode-stories-api
 
-https://github.com/benawad/vscode-stories
+https://github.com/ide-stories/vscode-stories
 
 # How to run on your computer
 
