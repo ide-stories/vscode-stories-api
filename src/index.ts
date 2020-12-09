@@ -20,6 +20,8 @@ import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
+import { Octokit } from "@octokit/rest";
+const octokit = new Octokit();
 
 const upgradeMessage =
   "Upgrade the VSCode Stories extension, I fixed it and changed the API.";
@@ -27,11 +29,11 @@ const upgradeMessage =
 const main = async () => {
   const prodCredentials = __prod__
     ? {
-        host: process.env.SOCKET_PATH ? process.env.SOCKET_PATH : process.env.DB_HOST,
-        port: Number(process.env.DB_PORT),
-        username: process.env.DB_USER,
-        password: process.env.DB_PASSWORD,
-      }
+      host: process.env.SOCKET_PATH ? process.env.SOCKET_PATH : process.env.DB_HOST,
+      port: Number(process.env.DB_PORT),
+      username: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+    }
     : {};
   console.log("about to connect to db, host: ", process.env.DB_HOST);
 
@@ -115,6 +117,41 @@ const main = async () => {
     }
   );
 
+  app.get("/user/username", isAuth(), async (req: any, res) => {
+    res.send(await getConnection().query(`select u."username" from "user" u where u."id" = '${req.userId}';`));
+  });
+
+  app.get("/github/friends/:username", isAuth(false), async (req: any, res) => {
+    const { username } = req.params;
+    // Get the user objects the user (username) is following
+    let result = await octokit.request('GET /users/{username}/following', {
+      username: username
+    });
+    // Take the data array from the result, which is basically all the users in an array
+    const { data } = result;
+    // Create a string of WHERE conditions 
+    let add = ``;
+    for (var i = 0; i < data.length; i++) {
+      if (i != 0) {
+        add += ` OR `;
+      }
+      add += `u."githubId" LIKE '${data[i]?.id}'`;
+    }
+    // Create the query and add the WHERE conditions
+    // Only return the ids of the users
+    let query = `select u."id" from "user" u where ${add};`;
+    // Execute query
+    const arr = await getConnection().query(query);
+
+    let friendIds: Array<any> = [];
+    // Loop through all the id objects and add them to a list,
+    // in order to have a clear json structure for the frontend
+    arr.forEach((userId: { id: any; }) => {
+      friendIds.push(userId?.id);
+    })
+    res.send({ friendIds });
+  });
+
   app.get("/story/likes/:id", async (_req, _res, next) => {
     return next(createError(400, upgradeMessage));
   });
@@ -137,9 +174,8 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
-      left join "favorite" l on l."gifStoryId" = ts.id ${
-        req.userId ? `and l."userId" = $2` : ""
-      }
+      left join "favorite" l on l."gifStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
+            }
       where id = $1
       `,
             replacements
@@ -162,9 +198,8 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."textStoryId" is not null "hasLiked" from text_story ts
-      left join "like" l on l."textStoryId" = ts.id ${
-        req.userId ? `and l."userId" = $2` : ""
-      }
+      left join "like" l on l."textStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
+            }
       where id = $1
       `,
             replacements
