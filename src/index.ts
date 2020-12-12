@@ -15,6 +15,7 @@ import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
+import { Friend } from "./entities/Friend";
 import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
@@ -173,6 +174,29 @@ const main = async () => {
       });
     }
   });
+  app.get("/is-friend/:id", isAuth(false), async (req: any, res) => {
+    const { id } = req.params;
+    if (!id || !isUUID.v4(id)) {
+      res.json({ friends: null });
+    } else {
+      const replacements = [id];
+      if (req.userId) {
+        replacements.push(req.userId);
+      }
+      res.json({
+        isFriend: (
+          await getConnection().query(
+            `
+            select * from friend f
+            where f."userId" = $2
+            and f."friendsUserId" = $1
+            `,
+            replacements
+          )
+        )[0],
+      });
+    }
+  });
   app.get("/gif-stories/hot/:cursor?", async (req, res) => {
     let cursor = 0;
     if (req.params.cursor) {
@@ -213,6 +237,7 @@ const main = async () => {
     const stories = await getConnection().query(`
       select
       ts.id,
+      ts."creatorId",
       u.username "creatorUsername",
       u."photoUrl" "creatorAvatarUrl",
       u.flair
@@ -261,6 +286,40 @@ const main = async () => {
     }
 
     await TextStory.delete(criteria);
+    res.send({ ok: true });
+  });
+
+  app.post("/remove-friend/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Friend.delete({
+        userId: req.userId,
+        friendsUserId: id,
+      });
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "It's probably already your friend"));
+    }
+
+    res.send({ ok: true });
+  });
+  app.post("/add-friend/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Friend.insert({ userId: req.userId, friendsUserId: id });
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "It's probably already your friend"));
+    }
+
     res.send({ ok: true });
   });
 
