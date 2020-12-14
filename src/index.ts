@@ -249,6 +249,7 @@ const main = async () => {
       select
       ts.id,
       u.username "creatorUsername",
+      u."id" "creatorId",
       u."photoUrl" "creatorAvatarUrl",
       u.flair
       from text_story ts
