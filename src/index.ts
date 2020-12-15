@@ -116,6 +116,12 @@ const main = async () => {
     }
   );
 
+  if (process.env.LATENCY_ON === "true") {
+    app.use(function (_req, _res, next) {
+      setTimeout(next, Number(process.env.LATENCY_MS));
+    });
+  }
+
   app.get("/story/likes/:id", async (_req, _res, next) => {
     return next(createError(400, upgradeMessage));
   });
