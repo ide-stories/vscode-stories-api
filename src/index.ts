@@ -336,6 +336,11 @@ const main = async () => {
       return;
     }
     try {
+      const currentLike = await Like.find({
+        textStoryId: id,
+        userId: req.userId,
+      });
+      if (currentLike.length !== 1) return;
       const { affected } = await Like.delete({
         textStoryId: id,
         userId: req.userId,
@@ -357,6 +362,11 @@ const main = async () => {
       return;
     }
     try {
+      const currentLike = await Like.find({
+        textStoryId: id,
+        userId: req.userId,
+      });
+      if (currentLike.length !== 0) return;
       await Like.insert({ textStoryId: id, userId: req.userId });
     } catch (err) {
       console.log(err);
