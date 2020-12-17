@@ -56,6 +56,9 @@ export class User extends BaseEntity {
   @OneToMany(() => Like, (s) => s.user)
   likes: Promise<Like>;
 
+  @OneToMany(() => User, (s) => s)
+  friends: Promise<User>;
+
   @CreateDateColumn({ type: "timestamp with time zone" })
   createdAt: Date;
 

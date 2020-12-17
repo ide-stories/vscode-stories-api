@@ -15,6 +15,7 @@ import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
+import { Friend } from "./entities/Friend";
 import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
@@ -27,15 +28,15 @@ const upgradeMessage =
   "Upgrade the VSCode Stories extension, I fixed it and changed the API.";
 
 const main = async () => {
-  const prodCredentials = __prod__
-    ? {
-      host: process.env.SOCKET_PATH ? process.env.SOCKET_PATH : process.env.DB_HOST,
-      port: Number(process.env.DB_PORT),
-      username: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-    }
-    : {};
-  console.log("about to connect to db, host: ", process.env.DB_HOST);
+  const credentials = {
+    host: process.env.SOCKET_PATH
+      ? process.env.SOCKET_PATH
+      : process.env.DB_HOST,
+    port: Number(process.env.DB_PORT),
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+  };
+  console.log("about to connect to db, host: ", credentials.host);
 
   const conn = await createConnection({
     type: "postgres",
@@ -44,7 +45,7 @@ const main = async () => {
     migrations: [join(__dirname, "./migrations/*")],
     // synchronize: !__prod__,
     logging: !__prod__,
-    ...prodCredentials,
+    ...credentials,
   });
   console.log("connected, running migrations now");
   await conn.runMigrations();
@@ -118,18 +119,22 @@ const main = async () => {
   );
 
   app.get("/user/username", isAuth(), async (req: any, res) => {
-    res.send(await getConnection().query(`select u."username" from "user" u where u."id" = '${req.userId}';`));
+    res.send(
+      await getConnection().query(
+        `select u."username" from "user" u where u."id" = '${req.userId}';`
+      )
+    );
   });
 
   app.get("/github/friends/:username", isAuth(false), async (req: any, res) => {
     const { username } = req.params;
     // Get the user objects the user (username) is following
-    let result = await octokit.request('GET /users/{username}/following', {
-      username: username
+    let result = await octokit.request("GET /users/{username}/following", {
+      username: username,
     });
     // Take the data array from the result, which is basically all the users in an array
     const { data } = result;
-    // Create a string of WHERE conditions 
+    // Create a string of WHERE conditions
     let add = ``;
     for (var i = 0; i < data.length; i++) {
       if (i != 0) {
@@ -146,11 +151,16 @@ const main = async () => {
     let friendIds: Array<any> = [];
     // Loop through all the id objects and add them to a list,
     // in order to have a clear json structure for the frontend
-    arr.forEach((userId: { id: any; }) => {
+    arr.forEach((userId: { id: any }) => {
       friendIds.push(userId?.id);
-    })
+    });
     res.send({ friendIds });
   });
+  if (process.env.LATENCY_ON === "true") {
+    app.use(function (_req, _res, next) {
+      setTimeout(next, Number(process.env.LATENCY_MS));
+    });
+  }
 
   app.get("/story/likes/:id", async (_req, _res, next) => {
     return next(createError(400, upgradeMessage));
@@ -174,8 +184,9 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
-      left join "favorite" l on l."gifStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
-            }
+      left join "favorite" l on l."gifStoryId" = ts.id ${
+        req.userId ? `and l."userId" = $2` : ""
+      }
       where id = $1
       `,
             replacements
@@ -198,10 +209,34 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."textStoryId" is not null "hasLiked" from text_story ts
-      left join "like" l on l."textStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
-            }
+      left join "like" l on l."textStoryId" = ts.id ${
+        req.userId ? `and l."userId" = $2` : ""
+      }
       where id = $1
       `,
+            replacements
+          )
+        )[0],
+      });
+    }
+  });
+  app.get("/is-friend/:id", isAuth(false), async (req: any, res) => {
+    const { id } = req.params;
+    if (!id || !isUUID.v4(id)) {
+      res.json({ friends: null });
+    } else {
+      const replacements = [id];
+      if (req.userId) {
+        replacements.push(req.userId);
+      }
+      res.json({
+        isFriend: (
+          await getConnection().query(
+            `
+            select * from friend f
+            where f."userId" = $2
+            and f."friendsUserId" = $1
+            `,
             replacements
           )
         )[0],
@@ -248,6 +283,7 @@ const main = async () => {
     const stories = await getConnection().query(`
       select
       ts.id,
+      ts."creatorId",
       u.username "creatorUsername",
       u."id" "creatorId",
       u."photoUrl" "creatorAvatarUrl",
@@ -300,6 +336,40 @@ const main = async () => {
     res.send({ ok: true });
   });
 
+  app.post("/remove-friend/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Friend.delete({
+        userId: req.userId,
+        friendsUserId: id,
+      });
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "It's probably already your friend"));
+    }
+
+    res.send({ ok: true });
+  });
+  app.post("/add-friend/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      await Friend.insert({ userId: req.userId, friendsUserId: id });
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "It's probably already your friend"));
+    }
+
+    res.send({ ok: true });
+  });
+
   app.post("/unlike-text-story/:id", isAuth(), async (req: any, res, next) => {
     const { id } = req.params;
     if (!isUUID.v4(id)) {
@@ -307,6 +377,11 @@ const main = async () => {
       return;
     }
     try {
+      const currentLike = await Like.find({
+        textStoryId: id,
+        userId: req.userId,
+      });
+      if (currentLike.length !== 1) return;
       const { affected } = await Like.delete({
         textStoryId: id,
         userId: req.userId,
@@ -328,6 +403,11 @@ const main = async () => {
       return;
     }
     try {
+      const currentLike = await Like.find({
+        textStoryId: id,
+        userId: req.userId,
+      });
+      if (currentLike.length !== 0) return;
       await Like.insert({ textStoryId: id, userId: req.userId });
     } catch (err) {
       console.log(err);
@@ -477,7 +557,7 @@ const main = async () => {
     }
   });
 
-  app.listen((process.env.PORT || 8080), () => {
+  app.listen(process.env.PORT || 8080, () => {
     console.log("server started");
   });
 };
