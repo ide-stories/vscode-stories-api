@@ -21,6 +21,8 @@ import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
+import { Octokit } from "@octokit/rest";
+const octokit = new Octokit();
 
 const upgradeMessage =
   "Upgrade the VSCode Stories extension, I fixed it and changed the API.";
@@ -116,6 +118,44 @@ const main = async () => {
     }
   );
 
+  app.get("/user/username", isAuth(), async (req: any, res) => {
+    res.send(
+      await getConnection().query(
+        `select u."username" from "user" u where u."id" = '${req.userId}';`
+      )
+    );
+  });
+
+  app.get("/github/friends/:username", isAuth(false), async (req: any, res) => {
+    const { username } = req.params;
+    // Get the user objects the user (username) is following
+    let result = await octokit.request("GET /users/{username}/following", {
+      username: username,
+    });
+    // Take the data array from the result, which is basically all the users in an array
+    const { data } = result;
+    // Create a string of WHERE conditions
+    let add = ``;
+    for (var i = 0; i < data.length; i++) {
+      if (i != 0) {
+        add += ` OR `;
+      }
+      add += `u."githubId" LIKE '${data[i]?.id}'`;
+    }
+    // Create the query and add the WHERE conditions
+    // Only return the ids of the users
+    let query = `select u."id" from "user" u where ${add};`;
+    // Execute query
+    const arr = await getConnection().query(query);
+
+    let friendIds: Array<any> = [];
+    // Loop through all the id objects and add them to a list,
+    // in order to have a clear json structure for the frontend
+    arr.forEach((userId: { id: any }) => {
+      friendIds.push(userId?.id);
+    });
+    res.send({ friendIds });
+  });
   if (process.env.LATENCY_ON === "true") {
     app.use(function (_req, _res, next) {
       setTimeout(next, Number(process.env.LATENCY_MS));
@@ -245,6 +285,7 @@ const main = async () => {
       ts.id,
       ts."creatorId",
       u.username "creatorUsername",
+      u."id" "creatorId",
       u."photoUrl" "creatorAvatarUrl",
       u.flair
       from text_story ts
