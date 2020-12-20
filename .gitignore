@@ -3,4 +3,5 @@ dist
 .env
 .vscode
 .deployment
+.log
 app.yaml
