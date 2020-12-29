@@ -1,0 +1,61 @@
+version: '3.5'
+
+services:
+
+  api:
+    container_name: stories_api
+    build: .
+    ports:
+      - 8080:8080
+
+    environment:
+      TOKEN_SECRET: jqowd0qwe012jjje21dojdol2io1dj12o
+      DB_HOST: postgres_container
+      DB_USER: postgres
+      DB_PASSWORD: changeme
+      DB_PORT: 5432
+      GITHUB_CLIENT_ID: test
+      GITHUB_CLIENT_SECRET: test
+      SERVER_URL: 'localhost:8080'
+      REFRESH_TOKEN_SECRET: wqoikdjq90d210381jdwq0oe0192803e12ejmsakldjqowei12
+      ACCESS_TOKEN_SECRET: woqieod12u09e8120eusaoidcnasjo0923810ued9j1n2oijaqwe
+    networks:
+      - postgres
+    restart: unless-stopped
+
+  postgres:
+    container_name: postgres_container
+    image: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: changeme
+      PGDATA: /data/postgres
+    volumes:
+       - postgres:/data/postgres
+    ports:
+      - 5432:5432
+    networks:
+      - postgres
+    restart: unless-stopped
+  
+  pgadmin:
+    container_name: pgadmin_container
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: pgadmin4@pgadmin.org
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+       - pgadmin:/root/.pgadmin
+    ports:
+      - 5050:80
+    networks:
+      - postgres
+    restart: unless-stopped
+
+networks:
+  postgres:
+    driver: bridge
+
+volumes:
+    postgres:
+    pgadmin:
