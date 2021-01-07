@@ -54,6 +54,7 @@ const main = async () => {
   passport.use(
     new GitHubStrategy(
       {
+        scope: "user:follow",
         clientID: process.env.GITHUB_CLIENT_ID,
         clientSecret: process.env.GITHUB_CLIENT_SECRET,
         callbackURL: `${process.env.SERVER_URL}/auth/github/callback`,
@@ -220,28 +221,30 @@ const main = async () => {
       });
     }
   });
-  app.get("/is-friend/:id", isAuth(false), async (req: any, res) => {
-    const { id } = req.params;
-    if (!id || !isUUID.v4(id)) {
-      res.json({ friends: null });
-    } else {
-      const replacements = [id];
-      if (req.userId) {
-        replacements.push(req.userId);
-      }
-      res.json({
-        isFriend: (
-          await getConnection().query(
-            `
-            select * from friend f
-            where f."userId" = $2
-            and f."friendsUserId" = $1
-            `,
-            replacements
-          )
-        )[0],
+  app.get("/is-friend/:username", isAuth(), async (req: any, res) => {
+    const { username } = req.params;
+    try {
+      let user = await User.findOne({ id: req.userId });
+
+      let result = await octokit.request('GET /users{/username}/following/{target_user}', {
+        username: user?.username,
+        target_user: username,
+        headers: {
+          accept: `application/vnd.github.v3+json`,
+          authorization: `token ${user?.githubAccessToken}`,
+        }
       });
+
+      if (result.status === 204) {
+        res.send({ ok: true });
+      } else {
+        res.send({ ok: false });
+      }
+    } catch (err) {
+      console.log(err);
     }
+
+    res.send({ ok: false });
   });
   app.get("/gif-stories/hot/:cursor?", async (req, res) => {
     let cursor = 0;
@@ -336,35 +339,42 @@ const main = async () => {
     res.send({ ok: true });
   });
 
-  app.post("/remove-friend/:id", isAuth(), async (req: any, res, next) => {
-    const { id } = req.params;
-    if (!isUUID.v4(id)) {
-      res.send({ ok: false });
-      return;
-    }
+  app.post("/remove-friend/:username", isAuth(), async (req: any, res, next) => {
+    const { username } = req.params;
+
     try {
-      await Friend.delete({
-        userId: req.userId,
-        friendsUserId: id,
+      let user = await User.findOne({ id: req.userId });
+
+      await octokit.request(`DELETE /user/following{/username}`, {
+        username: username,
+        headers: {
+          accept: `application/vnd.github.v3+json`,
+          authorization: `token ${user?.githubAccessToken}`,
+        }
       });
     } catch (err) {
       console.log(err);
-      return next(createError(400, "It's probably already your friend"));
+      return next(createError(400, "There's no such user"));
     }
 
     res.send({ ok: true });
   });
-  app.post("/add-friend/:id", isAuth(), async (req: any, res, next) => {
-    const { id } = req.params;
-    if (!isUUID.v4(id)) {
-      res.send({ ok: false });
-      return;
-    }
+  app.post("/add-friend/:username", isAuth(), async (req: any, res, next) => {
+    const { username } = req.params;
+
     try {
-      await Friend.insert({ userId: req.userId, friendsUserId: id });
+      let user = await User.findOne({ id: req.userId });
+
+      await octokit.request(`PUT /user/following{/username}`, {
+        username: username,
+        headers: {
+          accept: `application/vnd.github.v3+json`,
+          authorization: `token ${user?.githubAccessToken}`,
+        }
+      });
     } catch (err) {
       console.log(err);
-      return next(createError(400, "It's probably already your friend"));
+      return next(createError(400, "There's no such user"));
     }
 
     res.send({ ok: true });
