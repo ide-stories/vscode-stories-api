@@ -223,28 +223,35 @@ const main = async () => {
   });
   app.get("/is-friend/:username", isAuth(), async (req: any, res) => {
     const { username } = req.params;
+
+    let found: boolean = false;
     try {
       let user = await User.findOne({ id: req.userId });
-
-      let result = await octokit.request('GET /users{/username}/following/{target_user}', {
-        username: user?.username,
-        target_user: username,
+      
+      let result = await octokit.request('GET /users/{username}/following', {
+        username: user!.username,
         headers: {
           accept: `application/vnd.github.v3+json`,
           authorization: `token ${user?.githubAccessToken}`,
         }
       });
 
-      if (result.status === 204) {
-        res.send({ ok: true });
-      } else {
-        res.send({ ok: false });
-      }
+      const { data } = result;
+
+      data.forEach((el: any) => {
+        if (el.login === username) {
+          found = true;
+        }
+      });
     } catch (err) {
       console.log(err);
     }
 
-    res.send({ ok: false });
+    if (found) {
+      res.send({ ok: true });
+    } else {
+      res.send({ ok: false });
+    }
   });
   app.get("/gif-stories/hot/:cursor?", async (req, res) => {
     let cursor = 0;
