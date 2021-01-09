@@ -127,11 +127,16 @@ const main = async () => {
     );
   });
 
-  app.get("/github/friends/:username", isAuth(false), async (req: any, res) => {
-    const { username } = req.params;
+  app.get("/github/friends", isAuth(), async (req: any, res) => {
+    let user = await User.findOne({ id: req.userId });
+
     // Get the user objects the user (username) is following
-    let result = await octokit.request("GET /users/{username}/following", {
-      username: username,
+    let result = await octokit.request("GET /users{/username}/following", {
+      username: user?.username,
+      headers: {
+        accept: `application/vnd.github.v3+json`,
+        authorization: `token ${user?.githubAccessToken}`,
+      }
     });
     // Take the data array from the result, which is basically all the users in an array
     const { data } = result;
@@ -228,8 +233,8 @@ const main = async () => {
     try {
       let user = await User.findOne({ id: req.userId });
       
-      let result = await octokit.request('GET /users/{username}/following', {
-        username: user!.username,
+      let result = await octokit.request('GET /users{/username}/following', {
+        username: user?.username,
         headers: {
           accept: `application/vnd.github.v3+json`,
           authorization: `token ${user?.githubAccessToken}`,
