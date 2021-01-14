@@ -309,7 +309,7 @@ const main = async () => {
     };
     res.json(data);
   });
-  app.get("/text-stories/hot/:cursor?", async (req, res) => {
+  app.get("/text-stories/hot/:cursor?", isAuth(false), async (req: any, res) => {
     let cursor = 0;
     if (req.params.cursor) {
       const nCursor = parseInt(req.params.cursor);
