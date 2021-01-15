@@ -377,6 +377,9 @@ const main = async () => {
       });
     } catch (err) {
       console.log(err);
+      if (err.status === 404) {
+        return next(createError(404, "You probably need to reauthenticate in order to follow people"));
+      }
       return next(createError(400, "There's no such user"));
     }
 
@@ -397,6 +400,9 @@ const main = async () => {
       });
     } catch (err) {
       console.log(err);
+      if (err.status === 404) {
+        return next(createError(404, "You probably need to reauthenticate in order to follow people"));  
+      }
       return next(createError(400, "There's no such user"));
     }
 
