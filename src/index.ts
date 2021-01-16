@@ -144,6 +144,15 @@ const main = async () => {
       });
       // Take the data array from the result, which is basically all the users in an array
       const { data } = result;
+      if (data.length === 0) {
+        const d = {
+          stories: [],
+          friendIds: [],
+          hasMore: false,
+        };
+        res.json(d);
+        return;
+      }
       // Create a string of WHERE conditions
       let add = ``;
       for (var i = 0; i < data.length; i++) {
@@ -164,6 +173,16 @@ const main = async () => {
       arr.forEach((userId: { id: any }) => {
         friendIds.push(userId?.id);
       });
+    }
+
+    if (friendIds.length === 0) {
+      const d = {
+        stories: [],
+        friendIds: [],
+        hasMore: false,
+      };
+      res.json(d);
+      return;
     }
     
     // Perform request to get friends stories
