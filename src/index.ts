@@ -22,6 +22,7 @@ import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
 import { Octokit } from "@octokit/rest";
+import { fetchStories } from "./queryBuilder";
 const octokit = new Octokit();
 
 const upgradeMessage =
@@ -54,6 +55,7 @@ const main = async () => {
   passport.use(
     new GitHubStrategy(
       {
+        scope: "user:follow",
         clientID: process.env.GITHUB_CLIENT_ID,
         clientSecret: process.env.GITHUB_CLIENT_SECRET,
         callbackURL: `${process.env.SERVER_URL}/auth/github/callback`,
@@ -126,35 +128,81 @@ const main = async () => {
     );
   });
 
-  app.get("/github/friends/:username", isAuth(false), async (req: any, res) => {
-    const { username } = req.params;
-    // Get the user objects the user (username) is following
-    let result = await octokit.request("GET /users/{username}/following", {
-      username: username,
-    });
-    // Take the data array from the result, which is basically all the users in an array
-    const { data } = result;
-    // Create a string of WHERE conditions
-    let add = ``;
-    for (var i = 0; i < data.length; i++) {
-      if (i != 0) {
-        add += ` OR `;
-      }
-      add += `u."githubId" LIKE '${data[i]?.id}'`;
-    }
-    // Create the query and add the WHERE conditions
-    // Only return the ids of the users
-    let query = `select u."id" from "user" u where ${add};`;
-    // Execute query
-    const arr = await getConnection().query(query);
+  app.get("/text-stories/friends/hot/:cursor?/:friendIds?", isAuth(), async (req: any, res) => {
+    let friendIds: Array<string> = req.params.friendIds ? req.params.friendIds.split(",") : [];
+    
+    if (friendIds.length === 0) {
+      let user = await User.findOne({ id: req.userId });
 
-    let friendIds: Array<any> = [];
-    // Loop through all the id objects and add them to a list,
-    // in order to have a clear json structure for the frontend
-    arr.forEach((userId: { id: any }) => {
-      friendIds.push(userId?.id);
-    });
-    res.send({ friendIds });
+      // Get the user objects the user (username) is following
+      let result = await octokit.request("GET /users{/username}/following", {
+        username: user?.username,
+        headers: {
+          accept: `application/vnd.github.v3+json`,
+          authorization: `token ${user?.githubAccessToken}`,
+        }
+      });
+      // Take the data array from the result, which is basically all the users in an array
+      const { data } = result;
+      if (data.length === 0) {
+        const d = {
+          stories: [],
+          friendIds: [],
+          hasMore: false,
+        };
+        res.json(d);
+        return;
+      }
+      // Create a string of WHERE conditions
+      let add = ``;
+      for (var i = 0; i < data.length; i++) {
+        if (i != 0) {
+          add += ` OR `;
+        }
+        add += `u."githubId" LIKE '${data[i]?.id}'`;
+      }
+      // Create the query and add the WHERE conditions
+      // Only return the ids of the users
+      let query = `select u."id" from "user" u where ${add};`;
+      // Execute query
+      const arr = await getConnection().query(query);
+
+      //let friendIds: Array<string> = [];
+      // Loop through all the id objects and add them to a list,
+      // in order to have a clear json structure for the frontend
+      arr.forEach((userId: { id: any }) => {
+        friendIds.push(userId?.id);
+      });
+    }
+
+    if (friendIds.length === 0) {
+      const d = {
+        stories: [],
+        friendIds: [],
+        hasMore: false,
+      };
+      res.json(d);
+      return;
+    }
+    
+    // Perform request to get friends stories
+    let cursor = 0;
+    if (req.params.cursor) {
+      const nCursor = parseInt(req.params.cursor);
+      if (!Number.isNaN(nCursor)) {
+        cursor = nCursor;
+      }
+    }
+    const limit = 11;
+    const stories = await fetchStories(limit, cursor, friendIds);
+
+    const data = {
+      stories: stories.slice(0, limit),
+      friendIds: friendIds,
+      hasMore: stories.length === limit + 1,
+    };
+
+    res.json(data);
   });
   if (process.env.LATENCY_ON === "true") {
     app.use(function (_req, _res, next) {
@@ -220,27 +268,36 @@ const main = async () => {
       });
     }
   });
-  app.get("/is-friend/:id", isAuth(false), async (req: any, res) => {
-    const { id } = req.params;
-    if (!id || !isUUID.v4(id)) {
-      res.json({ friends: null });
-    } else {
-      const replacements = [id];
-      if (req.userId) {
-        replacements.push(req.userId);
-      }
-      res.json({
-        isFriend: (
-          await getConnection().query(
-            `
-            select * from friend f
-            where f."userId" = $2
-            and f."friendsUserId" = $1
-            `,
-            replacements
-          )
-        )[0],
+  app.get("/is-friend/:username", isAuth(), async (req: any, res) => {
+    const { username } = req.params;
+
+    let found: boolean = false;
+    try {
+      let user = await User.findOne({ id: req.userId });
+      
+      let result = await octokit.request('GET /users{/username}/following', {
+        username: user?.username,
+        headers: {
+          accept: `application/vnd.github.v3+json`,
+          authorization: `token ${user?.githubAccessToken}`,
+        }
       });
+
+      const { data } = result;
+
+      data.forEach((el: any) => {
+        if (el.login === username) {
+          found = true;
+        }
+      });
+    } catch (err) {
+      console.log(err);
+    }
+
+    if (found) {
+      res.send({ ok: true });
+    } else {
+      res.send({ ok: false });
     }
   });
   app.get("/gif-stories/hot/:cursor?", async (req, res) => {
@@ -271,7 +328,7 @@ const main = async () => {
     };
     res.json(data);
   });
-  app.get("/text-stories/hot/:cursor?", async (req, res) => {
+  app.get("/text-stories/hot/:cursor?", isAuth(false), async (req: any, res) => {
     let cursor = 0;
     if (req.params.cursor) {
       const nCursor = parseInt(req.params.cursor);
@@ -280,20 +337,8 @@ const main = async () => {
       }
     }
     const limit = 21;
-    const stories = await getConnection().query(`
-      select
-      ts.id,
-      ts."creatorId",
-      u.username "creatorUsername",
-      u."id" "creatorId",
-      u."photoUrl" "creatorAvatarUrl",
-      u.flair
-      from text_story ts
-      inner join "user" u on u.id = ts."creatorId"
-      order by (ts."numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-ts."createdAt")/3600,1.8) DESC
-      limit ${limit + 1}
-      ${cursor ? `offset ${limit * cursor}` : ""}
-    `);
+
+    const stories = await fetchStories(limit, cursor);
 
     const data = {
       stories: stories.slice(0, limit),
@@ -336,35 +381,48 @@ const main = async () => {
     res.send({ ok: true });
   });
 
-  app.post("/remove-friend/:id", isAuth(), async (req: any, res, next) => {
-    const { id } = req.params;
-    if (!isUUID.v4(id)) {
-      res.send({ ok: false });
-      return;
-    }
+  app.post("/remove-friend/:username", isAuth(), async (req: any, res, next) => {
+    const { username } = req.params;
+
     try {
-      await Friend.delete({
-        userId: req.userId,
-        friendsUserId: id,
+      let user = await User.findOne({ id: req.userId });
+
+      await octokit.request(`DELETE /user/following{/username}`, {
+        username: username,
+        headers: {
+          accept: `application/vnd.github.v3+json`,
+          authorization: `token ${user?.githubAccessToken}`,
+        }
       });
     } catch (err) {
       console.log(err);
-      return next(createError(400, "It's probably already your friend"));
+      if (err.status === 404) {
+        return next(createError(404, "You probably need to reauthenticate in order to follow people"));
+      }
+      return next(createError(400, "There's no such user"));
     }
 
     res.send({ ok: true });
   });
-  app.post("/add-friend/:id", isAuth(), async (req: any, res, next) => {
-    const { id } = req.params;
-    if (!isUUID.v4(id)) {
-      res.send({ ok: false });
-      return;
-    }
+  app.post("/add-friend/:username", isAuth(), async (req: any, res, next) => {
+    const { username } = req.params;
+
     try {
-      await Friend.insert({ userId: req.userId, friendsUserId: id });
+      let user = await User.findOne({ id: req.userId });
+
+      await octokit.request(`PUT /user/following{/username}`, {
+        username: username,
+        headers: {
+          accept: `application/vnd.github.v3+json`,
+          authorization: `token ${user?.githubAccessToken}`,
+        }
+      });
     } catch (err) {
       console.log(err);
-      return next(createError(400, "It's probably already your friend"));
+      if (err.status === 404) {
+        return next(createError(404, "You probably need to reauthenticate in order to follow people"));  
+      }
+      return next(createError(400, "There's no such user"));
     }
 
     res.send({ ok: true });
