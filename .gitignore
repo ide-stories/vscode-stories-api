@@ -5,3 +5,5 @@ dist
 .deployment
 .log
 app.yaml
+package-lock.json
+pnpm*
