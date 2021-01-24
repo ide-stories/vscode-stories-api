@@ -22,7 +22,7 @@ import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
 import { Octokit } from "@octokit/rest";
-import { fetchStories } from "./queryBuilder";
+import { fetchStories, fetchUserStories } from "./queryBuilder";
 const octokit = new Octokit();
 
 const upgradeMessage =
@@ -126,6 +126,25 @@ const main = async () => {
         `select u."username" from "user" u where u."id" = '${req.userId}';`
       )
     );
+  });
+
+  app.get("/user/text-stories/:cursor?", isAuth(), async (req: any, res) => {
+    let cursor = 0;
+    if (req.params.cursor) {
+      const nCursor = parseInt(req.params.cursor);
+      if (!Number.isNaN(nCursor)) {
+        cursor = nCursor;
+      }
+    }
+    const limit = 10;
+
+    const stories = await fetchUserStories(limit, cursor, req.userId);
+
+    const data = {
+      stories: stories.slice(0, limit),
+      hasMore: stories.length === limit + 1,
+    };
+    res.json(data);
   });
 
   app.get("/text-stories/friends/hot/:cursor?/:friendIds?", isAuth(), async (req: any, res) => {
