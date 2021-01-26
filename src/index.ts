@@ -406,7 +406,7 @@ const main = async () => {
     }
   });
 
-  app.delete("/storage/delete/:fileId", async (req: any, res) => {
+  app.delete("/storage/delete/:fileId", isAuth(), async (req: any, res) => {
     const fileId = req.params.fileId;
     try {
       const response = await gifStoriesBucket.file(fileId).delete();
@@ -416,7 +416,7 @@ const main = async () => {
     }
   });
 
-  app.post("/delete-gif-story/:id", async (req: any, res) => {
+  app.post("/delete-gif-story/:id", isAuth(), async (req: any, res) => {
     const { id } = req.params;
     if (!isUUID.v4(id)) {
       res.send({ ok: false });
