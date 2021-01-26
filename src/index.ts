@@ -389,7 +389,7 @@ const main = async () => {
     }
   );
 
-  app.get("/storage/write/:fileId", async (req: any, res) => {
+  app.get("/storage/write/:fileId", isAuth(), async (req: any, res) => {
     const fileId = req.params.fileId;
     // gcsSignedUrl(gifStoriesBucket, fileId, 5, "write")
     //   .then((url) => {
@@ -400,7 +400,7 @@ const main = async () => {
 
     try {
       const response = await gcsSignedUrl(gifStoriesBucket, fileId, 5, "write");
-      res.send(response).status(200);
+      res.json(response).status(200);
     } catch (error) {
       res.send(error.message).status(404);
     }
