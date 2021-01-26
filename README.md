@@ -2,6 +2,8 @@
 
 https://github.com/ide-stories/vscode-stories
 
+- [Discord](https://discord.gg/ABpGdRxvaA)
+
 # How to run on your computer
 
 1. Have PostgreSQL running on your computer
