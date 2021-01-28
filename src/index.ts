@@ -62,6 +62,20 @@ const main = async () => {
 
   const gifStoriesBucket = storage.bucket(`${process.env.STORAGE_BUCKET}`);
 
+  // https://cloud.google.com/storage/docs/xml-api/reference-headers#xgoogcontentlengthrange
+  async function configureBucketCors() {
+    await gifStoriesBucket.setCorsConfiguration([
+      {
+        maxAgeSeconds: 3600,
+        method: ["PUT"],
+        origin: [`${process.env.ORIGIN_URL}`],
+        responseHeader: ["x-goog-content-length-range"],
+      },
+    ]);
+  }
+
+  configureBucketCors();
+
   // action.types read, write, delete
   const gcsSignedUrl = async (
     bucket: Bucket,
@@ -69,11 +83,13 @@ const main = async () => {
     minutesToExpiration: number,
     action: GetSignedUrlConfig["action"]
   ) => {
-    //const storage = new Storage();
     const options: GetSignedUrlConfig = {
       version: "v4",
       action: action,
       expires: Date.now() + minutesToExpiration * 60 * 1000,
+      extensionHeaders: {
+        "x-goog-content-length-range": "1,5242880",
+      },
     };
     const [url] = await bucket.file(filename).getSignedUrl(options);
     return url;
@@ -391,12 +407,6 @@ const main = async () => {
 
   app.get("/storage/write/:fileId", isAuth(), async (req: any, res) => {
     const fileId = req.params.fileId;
-    // gcsSignedUrl(gifStoriesBucket, fileId, 5, "write")
-    //   .then((url) => {
-    //     console.log(url);
-    //     res.send(url);
-    //   })
-    //   .catch((error) => console.log(error));
 
     try {
       const response = await gcsSignedUrl(gifStoriesBucket, fileId, 5, "write");
