@@ -15,7 +15,6 @@ import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
-import { Friend } from "./entities/Friend";
 import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
