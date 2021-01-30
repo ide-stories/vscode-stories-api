@@ -12,7 +12,7 @@ import { Strategy as GitHubStrategy } from "passport-github";
 import { join } from "path";
 import "reflect-metadata";
 import { createConnection, getConnection } from "typeorm";
-import { __prod__ } from "./constants";
+import { __prod__, gifUploadLimit } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
 import { GifStory } from "./entities/GifStory";
@@ -87,7 +87,7 @@ const main = async () => {
       action: action,
       expires: Date.now() + minutesToExpiration * 60 * 1000,
       extensionHeaders: {
-        "x-goog-content-length-range": "1,5242880",
+        "x-goog-content-length-range": `1,${gifUploadLimit}`,
       },
     };
     const [url] = await bucket.file(filename).getSignedUrl(options);
@@ -645,7 +645,7 @@ const main = async () => {
     }),
     async (req, res) => {
       //add next here for error
-      let { programmingLanguageId, filename } = req.body;
+      let { programmingLanguageId, filename, mediaId } = req.body;
       if (programmingLanguageId.length > 40) {
         programmingLanguageId = null;
       }
@@ -666,7 +666,8 @@ const main = async () => {
       // }
       // @todo if flagged ping me on slack
       const gs = await GifStory.create({
-        mediaId: filename,
+        mediaId,
+        filename,
         flagged,
         programmingLanguageId,
         creatorId: (req as any).userId,
