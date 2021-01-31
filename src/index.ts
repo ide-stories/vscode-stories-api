@@ -415,6 +415,7 @@ const main = async () => {
     }
   });
 
+  // This endpoint needs to be integrated within delete-gif-story
   app.delete("/storage/delete/:fileId", isAuth(), async (req: any, res) => {
     const fileId = req.params.fileId;
     try {
@@ -649,21 +650,12 @@ const main = async () => {
       if (programmingLanguageId.length > 40) {
         programmingLanguageId = null;
       }
-      //let filename: string = "";
-      let flagged = null; // Flagged was coming from vision ML which we don't have on serverless
-      // try {
-      //   const payload: any = jwt.verify(token, process.env.TOKEN_SECRET);
-      //   filename = payload.filename;
-      //   flagged = payload.flagged;
-      // } catch (err) {
-      //   console.log("tokenErr: ", err);
-      //   return next(createError(400, "something went wrong uploading gif"));
-      // }
-      // if (!filename) {
-      //   return next(
-      //     createError(400, "something went really wrong uploading gif")
-      //   );
-      // }
+
+      // Flagged was coming from vision ML which we don't have on serverless
+      // We can update flag if user is reported through ban system
+
+      let flagged = null;
+
       // @todo if flagged ping me on slack
       const gs = await GifStory.create({
         mediaId,
@@ -676,9 +668,9 @@ const main = async () => {
 
       res.send({
         id: gs.id,
-        creatorUsername: currentUser.username,
-        mediaId: filename,
+        mediaId: mediaId,
         creatorAvatarUrl: currentUser.photoUrl,
+        creatorUsername: currentUser.username,
         flair: currentUser.flair,
       });
     }
