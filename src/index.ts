@@ -79,6 +79,7 @@ const main = async () => {
             other: profile._json,
             profileUrl: profile.profileUrl,
             username: profile.username,
+            isBanned: false,
           };
           if (user) {
             await User.update(user.id, data);
@@ -151,19 +152,39 @@ const main = async () => {
   app.get("/user/ban/:username", isBot(), async (req: any, res, next) => {
     const { username } = req.params;
 
-    let user: User | undefined = await User.findOne({ username: username});
-    
+    let user: User | undefined = await User.findOne({ username: username });
+
     if (typeof user === "undefined") {
       return next(createError(404, "Can't find specified user"));
     }
 
     try {
-      await Banned.findOne({ userId: user?.id });
+      await Banned.findOneOrFail({ userId: user?.id });
 
-      res.status(200).send("User has already been banned");
+      res.status(204).send("User has already been banned");
       return;
     } catch (err) {
       await Banned.insert({ userId: user?.id, githubId: user?.githubId });
+      await User.update(user.id, { isBanned: true });
+    }
+
+    res.status(200).send({ ok: true });
+  });
+
+  app.get("/user/delete-stories/:username", isBot(), async (req: any, res, next) => {
+    const { username } = req.params;
+
+    let user: User | undefined = await User.findOne({ username: username });
+
+    if (typeof user === "undefined") {
+      return next(createError(404, "Can't find specified user"));
+    }
+
+    try {
+      await TextStory.delete({ creatorId: user.id });
+      await GifStory.delete({ creatorId: user.id });
+    } catch (err) {
+      console.log(err);
     }
 
     res.status(200).send({ ok: true });
@@ -171,7 +192,7 @@ const main = async () => {
 
   app.get("/text-stories/friends/hot/:cursor?/:friendIds?", isAuth(), async (req: any, res) => {
     let friendIds: Array<string> = req.params.friendIds ? req.params.friendIds.split(",") : [];
-    
+
     if (friendIds.length === 0) {
       let user = await User.findOne({ id: req.userId });
 
@@ -225,7 +246,7 @@ const main = async () => {
       res.json(d);
       return;
     }
-    
+
     // Perform request to get friends stories
     let cursor = 0;
     if (req.params.cursor) {
@@ -273,9 +294,8 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
-      left join "favorite" l on l."gifStoryId" = ts.id ${
-        req.userId ? `and l."userId" = $2` : ""
-      }
+      left join "favorite" l on l."gifStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
+            }
       where id = $1
       `,
             replacements
@@ -298,9 +318,8 @@ const main = async () => {
           await getConnection().query(
             `
       select ts.*, l."textStoryId" is not null "hasLiked" from text_story ts
-      left join "like" l on l."textStoryId" = ts.id ${
-        req.userId ? `and l."userId" = $2` : ""
-      }
+      left join "like" l on l."textStoryId" = ts.id ${req.userId ? `and l."userId" = $2` : ""
+            }
       where id = $1
       `,
             replacements
@@ -315,7 +334,7 @@ const main = async () => {
     let found: boolean = false;
     try {
       let user = await User.findOne({ id: req.userId });
-      
+
       let result = await octokit.request('GET /users{/username}/following', {
         username: user?.username,
         headers: {
@@ -461,7 +480,7 @@ const main = async () => {
     } catch (err) {
       console.log(err);
       if (err.status === 404) {
-        return next(createError(404, "You probably need to reauthenticate in order to follow people"));  
+        return next(createError(404, "You probably need to reauthenticate in order to follow people"));
       }
       return next(createError(400, "There's no such user"));
     }
