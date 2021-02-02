@@ -15,7 +15,6 @@ import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
-import { Friend } from "./entities/Friend";
 import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
@@ -23,6 +22,8 @@ import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
 import { Octokit } from "@octokit/rest";
 import { fetchStories, fetchUserStories } from "./queryBuilder";
+import { Banned } from "./entities/Banned";
+import { isBot } from "./isBot";
 const octokit = new Octokit();
 
 const upgradeMessage =
@@ -145,6 +146,27 @@ const main = async () => {
       hasMore: stories.length === limit + 1,
     };
     res.json(data);
+  });
+
+  app.get("/user/ban/:username", isBot(), async (req: any, res, next) => {
+    const { username } = req.params;
+
+    let user: User | undefined = await User.findOne({ username: username});
+    
+    if (typeof user === "undefined") {
+      return next(createError(404, "Can't find specified user"));
+    }
+
+    try {
+      await Banned.findOne({ userId: user?.id });
+
+      res.status(200).send("User has already been banned");
+      return;
+    } catch (err) {
+      await Banned.insert({ userId: user?.id, githubId: user?.githubId });
+    }
+
+    res.status(200).send({ ok: true });
   });
 
   app.get("/text-stories/friends/hot/:cursor?/:friendIds?", isAuth(), async (req: any, res) => {
