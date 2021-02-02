@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class Banned1612285664555 implements MigrationInterface {
-  name = "Banned1612285664555";
+export class Banned1612306192571 implements MigrationInterface {
+  name = "Banned1612306192571";
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
@@ -9,7 +9,7 @@ export class Banned1612285664555 implements MigrationInterface {
     );
 
     await queryRunner.query(
-      `ALTER TABLE "user" ADD "isBanned" boolean NOT NULL`
+      `ALTER TABLE "user" ADD "isBanned" boolean NOT NULL DEFAULT false`
     );
   }
 

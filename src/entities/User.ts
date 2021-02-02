@@ -23,7 +23,7 @@ export class User extends BaseEntity {
   @Column("text", { unique: true })
   username: string;
 
-  @Column("boolean")
+  @Column("boolean", { default: false })
   isBanned: boolean;
 
   @Column("text", { nullable: true })
