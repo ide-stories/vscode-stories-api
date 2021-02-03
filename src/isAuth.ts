@@ -44,6 +44,12 @@ export const isAuth: (st?: boolean) => RequestHandler<{}, any, any, {}> = (
     );
   }
 
+  if (user.isBanned) {
+    return next(
+      !shouldThrow ? undefined : createError(403, "You are banned! If you think the ban isn't rightful, then you can challenge the ban on our Discord server. https://discord.gg/ABpGdRxvaA")
+    );
+  }
+
   const tokens = createTokens(user);
 
   res.setHeader("refresh-token", tokens.refreshToken);

@@ -15,7 +15,6 @@ import { createConnection, getConnection } from "typeorm";
 import { __prod__ } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
-import { Friend } from "./entities/Friend";
 import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
@@ -23,6 +22,8 @@ import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
 import { Octokit } from "@octokit/rest";
 import { fetchStories, fetchUserStories } from "./queryBuilder";
+import { Banned } from "./entities/Banned";
+import { isBot } from "./isBot";
 const octokit = new Octokit();
 
 const upgradeMessage =
@@ -147,23 +148,119 @@ const main = async () => {
     res.json(data);
   });
 
-  app.get("/text-stories/friends/hot/:cursor?/:friendIds?", isAuth(), async (req: any, res) => {
-    let friendIds: Array<string> = req.params.friendIds ? req.params.friendIds.split(",") : [];
-    
-    if (friendIds.length === 0) {
-      let user = await User.findOne({ id: req.userId });
+  app.get("/user/ban/:username", isBot(), async (req: any, res, next) => {
+    const { username } = req.params;
 
-      // Get the user objects the user (username) is following
-      let result = await octokit.request("GET /users{/username}/following", {
-        username: user?.username,
-        headers: {
-          accept: `application/vnd.github.v3+json`,
-          authorization: `token ${user?.githubAccessToken}`,
+    let user: User | undefined = await User.findOne({ username: username });
+
+    if (typeof user === "undefined") {
+      return next(createError(404, "Can't find specified user"));
+    }
+
+    if (!user.isBanned) {
+      await Banned.insert({ userId: user?.id, githubId: user?.githubId });
+      await User.update(user.id, { isBanned: true });
+      res.status(200).send({ ok: true });
+    } else {
+      res.status(204).send("User has already been banned");
+    }
+  });
+
+  app.get("/user/unban/:username", isBot(), async (req: any, res, next) => {
+    const { username } = req.params;
+
+    let user: User | undefined = await User.findOne({ username: username });
+
+    if (typeof user === "undefined") {
+      return next(createError(404, "Can't find specified user"));
+    }
+
+    try {
+      await Banned.findOneOrFail({ userId: user?.id });
+      await Banned.delete({ userId: user?.id, githubId: user?.githubId });
+      await User.update(user.id, { isBanned: false });
+      res.status(200).send({ ok: true });
+    } catch (err) {
+      res.status(204).send("User isn't banned");
+    }
+  });
+
+  app.get(
+    "/user/delete-stories/:username",
+    isBot(),
+    async (req: any, res, next) => {
+      const { username } = req.params;
+
+      let user: User | undefined = await User.findOne({ username: username });
+
+      if (typeof user === "undefined") {
+        return next(createError(404, "Can't find specified user"));
+      }
+
+      try {
+        await TextStory.delete({ creatorId: user.id });
+        await GifStory.delete({ creatorId: user.id });
+      } catch (err) {
+        console.log(err);
+      }
+
+      res.status(200).send({ ok: true });
+    }
+  );
+
+  app.get(
+    "/text-stories/friends/hot/:cursor?/:friendIds?",
+    isAuth(),
+    async (req: any, res) => {
+      let friendIds: Array<string> = req.params.friendIds
+        ? req.params.friendIds.split(",")
+        : [];
+
+      if (friendIds.length === 0) {
+        let user = await User.findOne({ id: req.userId });
+
+        // Get the user objects the user (username) is following
+        let result = await octokit.request("GET /users{/username}/following", {
+          username: user?.username,
+          headers: {
+            accept: `application/vnd.github.v3+json`,
+            authorization: `token ${user?.githubAccessToken}`,
+          },
+        });
+        // Take the data array from the result, which is basically all the users in an array
+        const { data } = result;
+        if (data.length === 0) {
+          const d = {
+            stories: [],
+            friendIds: [],
+            hasMore: false,
+          };
+          res.json(d);
+          return;
         }
-      });
-      // Take the data array from the result, which is basically all the users in an array
-      const { data } = result;
-      if (data.length === 0) {
+        // Create a string of WHERE conditions
+        let add = ``;
+        for (var i = 0; i < data.length; i++) {
+          if (i != 0) {
+            add += ` OR `;
+          }
+          add += `u."githubId" LIKE '${data[i]?.id}'`;
+        }
+        // Create the query and add the WHERE conditions
+        // Only return the ids of the users
+        let query = `select u."id" from "user" u where ${add};`;
+        // Execute query
+        const arr = await getConnection().query(query);
+
+        //let friendIds: Array<string> = [];
+        // Loop through all the id objects and add them to a list,
+        // in order to have a clear json structure for the frontend
+        arr.forEach((userId: { id: any }) => {
+          friendIds.push(userId?.id);
+        });
+      }
+
+      if (friendIds.length === 0) {
         const d = {
           stories: [],
           friendIds: [],
@@ -172,57 +269,27 @@ const main = async () => {
         res.json(d);
         return;
       }
-      // Create a string of WHERE conditions
-      let add = ``;
-      for (var i = 0; i < data.length; i++) {
-        if (i != 0) {
-          add += ` OR `;
+
+      // Perform request to get friends stories
+      let cursor = 0;
+      if (req.params.cursor) {
+        const nCursor = parseInt(req.params.cursor);
+        if (!Number.isNaN(nCursor)) {
+          cursor = nCursor;
         }
-        add += `u."githubId" LIKE '${data[i]?.id}'`;
       }
-      // Create the query and add the WHERE conditions
-      // Only return the ids of the users
-      let query = `select u."id" from "user" u where ${add};`;
-      // Execute query
-      const arr = await getConnection().query(query);
+      const limit = 11;
+      const stories = await fetchStories(limit, cursor, friendIds);
 
-      //let friendIds: Array<string> = [];
-      // Loop through all the id objects and add them to a list,
-      // in order to have a clear json structure for the frontend
-      arr.forEach((userId: { id: any }) => {
-        friendIds.push(userId?.id);
-      });
-    }
-
-    if (friendIds.length === 0) {
-      const d = {
-        stories: [],
-        friendIds: [],
-        hasMore: false,
+      const data = {
+        stories: stories.slice(0, limit),
+        friendIds: friendIds,
+        hasMore: stories.length === limit + 1,
       };
-      res.json(d);
-      return;
-    }
-    
-    // Perform request to get friends stories
-    let cursor = 0;
-    if (req.params.cursor) {
-      const nCursor = parseInt(req.params.cursor);
-      if (!Number.isNaN(nCursor)) {
-        cursor = nCursor;
-      }
-    }
-    const limit = 11;
-    const stories = await fetchStories(limit, cursor, friendIds);
 
-    const data = {
-      stories: stories.slice(0, limit),
-      friendIds: friendIds,
-      hasMore: stories.length === limit + 1,
-    };
-
-    res.json(data);
-  });
+      res.json(data);
+    }
+  );
   if (process.env.LATENCY_ON === "true") {
     app.use(function (_req, _res, next) {
       setTimeout(next, Number(process.env.LATENCY_MS));
@@ -293,13 +360,13 @@ const main = async () => {
     let found: boolean = false;
     try {
       let user = await User.findOne({ id: req.userId });
-      
-      let result = await octokit.request('GET /users{/username}/following', {
+
+      let result = await octokit.request("GET /users{/username}/following", {
         username: user?.username,
         headers: {
           accept: `application/vnd.github.v3+json`,
           authorization: `token ${user?.githubAccessToken}`,
-        }
+        },
       });
 
       const { data } = result;
@@ -347,24 +414,28 @@ const main = async () => {
     };
     res.json(data);
   });
-  app.get("/text-stories/hot/:cursor?", isAuth(false), async (req: any, res) => {
-    let cursor = 0;
-    if (req.params.cursor) {
-      const nCursor = parseInt(req.params.cursor);
-      if (!Number.isNaN(nCursor)) {
-        cursor = nCursor;
+  app.get(
+    "/text-stories/hot/:cursor?",
+    isAuth(false),
+    async (req: any, res) => {
+      let cursor = 0;
+      if (req.params.cursor) {
+        const nCursor = parseInt(req.params.cursor);
+        if (!Number.isNaN(nCursor)) {
+          cursor = nCursor;
+        }
       }
+      const limit = 21;
+
+      const stories = await fetchStories(limit, cursor);
+
+      const data = {
+        stories: stories.slice(0, limit),
+        hasMore: stories.length === limit + 1,
+      };
+      res.json(data);
     }
-    const limit = 21;
-
-    const stories = await fetchStories(limit, cursor);
-
-    const data = {
-      stories: stories.slice(0, limit),
-      hasMore: stories.length === limit + 1,
-    };
-    res.json(data);
-  });
+  );
 
   app.post("/delete-gif-story/:id", isAuth(), async (req: any, res) => {
     const { id } = req.params;
@@ -400,29 +471,38 @@ const main = async () => {
     res.send({ ok: true });
   });
 
-  app.post("/remove-friend/:username", isAuth(), async (req: any, res, next) => {
-    const { username } = req.params;
+  app.post(
+    "/remove-friend/:username",
+    isAuth(),
+    async (req: any, res, next) => {
+      const { username } = req.params;
 
-    try {
-      let user = await User.findOne({ id: req.userId });
+      try {
+        let user = await User.findOne({ id: req.userId });
 
-      await octokit.request(`DELETE /user/following{/username}`, {
-        username: username,
-        headers: {
-          accept: `application/vnd.github.v3+json`,
-          authorization: `token ${user?.githubAccessToken}`,
+        await octokit.request(`DELETE /user/following{/username}`, {
+          username: username,
+          headers: {
+            accept: `application/vnd.github.v3+json`,
+            authorization: `token ${user?.githubAccessToken}`,
+          },
+        });
+      } catch (err) {
+        console.log(err);
+        if (err.status === 404) {
+          return next(
+            createError(
+              404,
+              "You probably need to reauthenticate in order to follow people"
+            )
+          );
         }
-      });
-    } catch (err) {
-      console.log(err);
-      if (err.status === 404) {
-        return next(createError(404, "You probably need to reauthenticate in order to follow people"));
+        return next(createError(400, "There's no such user"));
       }
-      return next(createError(400, "There's no such user"));
-    }
 
-    res.send({ ok: true });
-  });
+      res.send({ ok: true });
+    }
+  );
   app.post("/add-friend/:username", isAuth(), async (req: any, res, next) => {
     const { username } = req.params;
 
@@ -434,12 +514,17 @@ const main = async () => {
         headers: {
           accept: `application/vnd.github.v3+json`,
           authorization: `token ${user?.githubAccessToken}`,
-        }
+        },
       });
     } catch (err) {
       console.log(err);
       if (err.status === 404) {
-        return next(createError(404, "You probably need to reauthenticate in order to follow people"));  
+        return next(
+          createError(
+            404,
+            "You probably need to reauthenticate in order to follow people"
+          )
+        );
       }
       return next(createError(400, "There's no such user"));
     }
