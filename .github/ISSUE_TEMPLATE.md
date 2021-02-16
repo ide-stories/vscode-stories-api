@@ -1,4 +1,4 @@
-Issue tracker is **ONLY** used for reporting bugs. New features should be discussed on our [Discordserver](https://discord.gg/ABpGdRxvaA) Please use [stackoverflow](https://stackoverflow.com) for supporting issues.
+The issue tracker is **ONLY** used for reporting bugs. New features should be discussed on our [Discordserver](https://discord.gg/ABpGdRxvaA) Please use [stackoverflow](https://stackoverflow.com) for support issues.
 
 <!--- Provide a general summary of the issue in the Title above -->
 
@@ -16,7 +16,7 @@ Issue tracker is **ONLY** used for reporting bugs. New features should be discus
 
 ## Steps to Reproduce
 
-<!--- Provide a link to a live example, or an unambiguous set of steps to -->
+<!--- Provide a link to a live example or an unambiguous set of steps to -->
 <!--- reproduce this bug. Include code to reproduce, if relevant -->
 
 1.
