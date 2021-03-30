@@ -21,7 +21,7 @@ import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
 import { Octokit } from "@octokit/rest";
-import { fetchStories } from "./queryBuilder";
+import { fetchGifStories, fetchStories } from "./queryBuilder";
 import { Bucket, GetSignedUrlConfig, Storage } from "@google-cloud/storage";
 import path from "path";
 const octokit = new Octokit();
@@ -171,7 +171,7 @@ const main = async () => {
   });
 
   app.get(
-    "/text-stories/friends/hot/:cursor?/:friendIds?",
+    "/stories/friends/hot/:cursor?/:friendIds?",
     isAuth(),
     async (req: any, res) => {
       let friendIds: Array<string> = req.params.friendIds
@@ -242,11 +242,12 @@ const main = async () => {
       }
       const limit = 11;
       const stories = await fetchStories(limit, cursor, friendIds);
-
+      const gifStories = await fetchGifStories(limit, cursor, friendIds);
+      
       const data = {
-        stories: stories.slice(0, limit),
+        stories: stories.slice(0, limit).concat(gifStories.slice(0, limit)),
         friendIds: friendIds,
-        hasMore: stories.length === limit + 1,
+        hasMore: (stories.length === limit + 1) ? true : gifStories.length === limit + 1,
       };
 
       res.json(data);
@@ -361,18 +362,8 @@ const main = async () => {
       }
     }
     const limit = 21;
-    const stories = await getConnection().query(`
-      select
-      ts.id,
-      u.username "creatorUsername",
-      u."photoUrl" "creatorAvatarUrl",
-      u.flair
-      from gif_story ts
-      inner join "user" u on u.id = ts."creatorId"
-      order by (ts."numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-ts."createdAt")/3600,1.8) DESC
-      limit ${limit + 1}
-      ${cursor ? `offset ${limit * cursor}` : ""}
-    `);
+
+    const stories = await fetchGifStories(limit, cursor);
 
     const data = {
       stories: stories.slice(0, limit),
