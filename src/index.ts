@@ -66,7 +66,7 @@ const main = async () => {
     await gifStoriesBucket.setCorsConfiguration([
       {
         maxAgeSeconds: 3600,
-        method: ["PUT"],
+        method: ["PUT", "GET"],
         origin: [`${process.env.ORIGIN_URL}`],
         responseHeader: ["x-goog-content-length-range"],
       },
@@ -277,20 +277,24 @@ const main = async () => {
       if (req.userId) {
         replacements.push(req.userId);
       }
-      res.json({
-        story: (
-          await getConnection().query(
-            `
-      select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
-      left join "favorite" l on l."gifStoryId" = ts.id ${
-        req.userId ? `and l."userId" = $2` : ""
-      }
-      where id = $1
-      `,
-            replacements
-          )
-        )[0],
-      });
+      // res.json({
+      //   story: (
+      //     await getConnection().query(
+      //       `
+      // select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
+      // left join "favorite" l on l."gifStoryId" = ts.id ${
+      //   req.userId ? `and l."userId" = $2` : ""
+      // }
+      // where id = $1
+      // `,
+      //       replacements
+      //     )
+      //   )[0],
+      // });
+
+      // TODO: This is just a temp fix
+      let story = await GifStory.findOne({ id: id });
+      res.json({story: (story)});
     }
   });
 
@@ -406,19 +410,19 @@ const main = async () => {
     }
   });
 
-  // This endpoint needs to be integrated within delete-gif-story
-  app.delete("/storage/delete/:fileId", isAuth(), async (req: any, res) => {
+  app.get("/storage/read/:fileId", isAuth(), async (req: any, res) => {
     const fileId = req.params.fileId;
+
     try {
-      const response = await gifStoriesBucket.file(fileId).delete();
-      res.send(response).status(200);
+      const response = await gcsSignedUrl(gifStoriesBucket, fileId, 5, "read");
+      res.json(response).status(200);
     } catch (error) {
       res.send(error.message).status(404);
     }
   });
 
-  app.post("/delete-gif-story/:id", isAuth(), async (req: any, res) => {
-    const { id } = req.params;
+  app.post("/delete-gif-story/:id/:mediaId", isAuth(), async (req: any, res) => {
+    const { id, mediaId } = req.params;
     if (!isUUID.v4(id)) {
       res.send({ ok: false });
       return;
@@ -431,6 +435,12 @@ const main = async () => {
     }
 
     await GifStory.delete(criteria);
+    try {
+      await gifStoriesBucket.file(`${mediaId}.gif`).delete();
+    } catch (error) {
+      res.send(error.message).status(404);
+    }
+
     res.send({ ok: true });
   });
 
@@ -570,6 +580,11 @@ const main = async () => {
       return;
     }
     try {
+      const currentFavorite = await Favorite.find({
+        gifStoryId: id,
+        userId: req.userId,
+      });
+      if (currentFavorite.length !== 0) return;
       await Favorite.insert({ gifStoryId: id, userId: req.userId });
     } catch (err) {
       console.log(err);
