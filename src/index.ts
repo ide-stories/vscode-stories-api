@@ -544,7 +544,34 @@ const main = async () => {
       }
     } catch (err) {
       console.log(err);
-      return next(createError(400, "You probably already liked this"));
+      return next(createError(400, "You probably already unliked this"));
+    }
+
+    res.send({ ok: true });
+  });
+
+  app.post("/unlike-gif-story/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      const currentFavorite = await Favorite.find({
+        gifStoryId: id,
+        userId: req.userId,
+      });
+      if (currentFavorite.length !== 1) return;
+      const { affected } = await Favorite.delete({
+        gifStoryId: id,
+        userId: req.userId,
+      });
+      if (affected) {
+        await GifStory.update(id, { numLikes: () => '"numLikes" - 1' });
+      }
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "You probably already unliked this"));
     }
 
     res.send({ ok: true });
