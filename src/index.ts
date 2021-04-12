@@ -277,24 +277,20 @@ const main = async () => {
       if (req.userId) {
         replacements.push(req.userId);
       }
-      // res.json({
-      //   story: (
-      //     await getConnection().query(
-      //       `
-      // select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
-      // left join "favorite" l on l."gifStoryId" = ts.id ${
-      //   req.userId ? `and l."userId" = $2` : ""
-      // }
-      // where id = $1
-      // `,
-      //       replacements
-      //     )
-      //   )[0],
-      // });
-
-      // TODO: This is just a temp fix
-      let story = await GifStory.findOne({ id: id });
-      res.json({story: (story)});
+      res.json({
+        story: (
+          await getConnection().query(
+            `
+      select ts.*, l."gifStoryId" is not null "hasLiked" from gif_story ts
+      left join "favorite" l on l."gifStoryId" = ts.id ${
+        req.userId ? `and l."userId" = $2` : ""
+      }
+      where id = $1
+      `,
+            replacements
+          )
+        )[0],
+      });
     }
   });
 
