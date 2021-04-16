@@ -20,6 +20,9 @@ export class GifStory extends BaseEntity {
   @Column("text", { nullable: true })
   flagged: "adult" | "racy" | "gore" | null;
 
+  @Column("text", { default: "untitled" })
+  filename: string;
+
   @Column("text")
   mediaId: string;
 

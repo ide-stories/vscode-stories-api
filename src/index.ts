@@ -12,17 +12,18 @@ import { Strategy as GitHubStrategy } from "passport-github";
 import { join } from "path";
 import "reflect-metadata";
 import { createConnection, getConnection } from "typeorm";
-import { __prod__ } from "./constants";
+import { __prod__, gifUploadLimit } from "./constants";
 import { createTokens } from "./createTokens";
 import { Favorite } from "./entities/Favorite";
-import { Friend } from "./entities/Friend";
 import { GifStory } from "./entities/GifStory";
 import { Like } from "./entities/Like";
 import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
 import { Octokit } from "@octokit/rest";
-import { fetchStories, fetchUserStories } from "./queryBuilder";
+import { fetchGifStories, fetchStories, fetchUserGifStories, fetchUserStories } from "./queryBuilder";
+import { Bucket, GetSignedUrlConfig, Storage } from "@google-cloud/storage";
+import path from "path";
 const octokit = new Octokit();
 
 const upgradeMessage =
@@ -51,6 +52,47 @@ const main = async () => {
   console.log("connected, running migrations now");
   await conn.runMigrations();
   console.log("migrations ran");
+
+  // google cloud
+  const storage = new Storage({
+    keyFilename: path.join(__dirname, `../${process.env.STORAGE_CRED_FILE}`),
+    projectId: process.env.STORAGE_PROJ_ID,
+  });
+
+  const gifStoriesBucket = storage.bucket(`${process.env.STORAGE_BUCKET}`);
+
+  // https://cloud.google.com/storage/docs/xml-api/reference-headers#xgoogcontentlengthrange
+  async function configureBucketCors() {
+    await gifStoriesBucket.setCorsConfiguration([
+      {
+        maxAgeSeconds: 3600,
+        method: ["PUT", "GET"],
+        origin: [`${process.env.ORIGIN_URL}`],
+        responseHeader: ["x-goog-content-length-range"],
+      },
+    ]);
+  }
+
+  configureBucketCors();
+
+  // action.types read, write, delete
+  const gcsSignedUrl = async (
+    bucket: Bucket,
+    filename: string,
+    minutesToExpiration: number,
+    action: GetSignedUrlConfig["action"]
+  ) => {
+    const options: GetSignedUrlConfig = {
+      version: "v4",
+      action: action,
+      expires: Date.now() + minutesToExpiration * 60 * 1000,
+      extensionHeaders: {
+        "x-goog-content-length-range": `1,${gifUploadLimit}`,
+      },
+    };
+    const [url] = await bucket.file(filename).getSignedUrl(options);
+    return url;
+  };
 
   passport.use(
     new GitHubStrategy(
@@ -127,8 +169,8 @@ const main = async () => {
       )
     );
   });
-
-  app.get("/user/text-stories/:cursor?", isAuth(), async (req: any, res) => {
+  
+  app.get("/stories/user/:cursor?", isAuth(), async (req: any, res) => {
     let cursor = 0;
     if (req.params.cursor) {
       const nCursor = parseInt(req.params.cursor);
@@ -136,34 +178,71 @@ const main = async () => {
         cursor = nCursor;
       }
     }
-    const limit = 10;
 
+    const limit = 5;
     const stories = await fetchUserStories(limit, cursor, req.userId);
+    const gifStories = await fetchUserGifStories(limit, cursor, req.userId);
 
     const data = {
-      stories: stories.slice(0, limit),
-      hasMore: stories.length === limit + 1,
+      stories: stories.slice(0, limit).concat(gifStories.slice(0, limit)),
+      hasMore: (stories.length === limit + 1) ? true : gifStories.length === limit + 1,
     };
     res.json(data);
   });
 
-  app.get("/text-stories/friends/hot/:cursor?/:friendIds?", isAuth(), async (req: any, res) => {
-    let friendIds: Array<string> = req.params.friendIds ? req.params.friendIds.split(",") : [];
-    
-    if (friendIds.length === 0) {
-      let user = await User.findOne({ id: req.userId });
+  app.get(
+    "/stories/friends/hot/:cursor?/:friendIds?",
+    isAuth(),
+    async (req: any, res) => {
+      let friendIds: Array<string> = req.params.friendIds
+        ? req.params.friendIds.split(",")
+        : [];
 
-      // Get the user objects the user (username) is following
-      let result = await octokit.request("GET /users{/username}/following", {
-        username: user?.username,
-        headers: {
-          accept: `application/vnd.github.v3+json`,
-          authorization: `token ${user?.githubAccessToken}`,
+      if (friendIds.length === 0) {
+        let user = await User.findOne({ id: req.userId });
+
+        // Get the user objects the user (username) is following
+        let result = await octokit.request("GET /users{/username}/following", {
+          username: user?.username,
+          headers: {
+            accept: `application/vnd.github.v3+json`,
+            authorization: `token ${user?.githubAccessToken}`,
+          },
+        });
+        // Take the data array from the result, which is basically all the users in an array
+        const { data } = result;
+        if (data.length === 0) {
+          const d = {
+            stories: [],
+            friendIds: [],
+            hasMore: false,
+          };
+          res.json(d);
+          return;
         }
-      });
-      // Take the data array from the result, which is basically all the users in an array
-      const { data } = result;
-      if (data.length === 0) {
+        // Create a string of WHERE conditions
+        let add = ``;
+        for (var i = 0; i < data.length; i++) {
+          if (i != 0) {
+            add += ` OR `;
+          }
+          add += `u."githubId" LIKE '${data[i]?.id}'`;
+        }
+        // Create the query and add the WHERE conditions
+        // Only return the ids of the users
+        let query = `select u."id" from "user" u where ${add};`;
+        // Execute query
+        const arr = await getConnection().query(query);
+
+        //let friendIds: Array<string> = [];
+        // Loop through all the id objects and add them to a list,
+        // in order to have a clear json structure for the frontend
+        arr.forEach((userId: { id: any }) => {
+          friendIds.push(userId?.id);
+        });
+      }
+
+      if (friendIds.length === 0) {
         const d = {
           stories: [],
           friendIds: [],
@@ -172,57 +251,29 @@ const main = async () => {
         res.json(d);
         return;
       }
-      // Create a string of WHERE conditions
-      let add = ``;
-      for (var i = 0; i < data.length; i++) {
-        if (i != 0) {
-          add += ` OR `;
+
+      // Perform request to get friends stories
+      let cursor = 0;
+      if (req.params.cursor) {
+        const nCursor = parseInt(req.params.cursor);
+        if (!Number.isNaN(nCursor)) {
+          cursor = nCursor;
         }
-        add += `u."githubId" LIKE '${data[i]?.id}'`;
       }
-      // Create the query and add the WHERE conditions
-      // Only return the ids of the users
-      let query = `select u."id" from "user" u where ${add};`;
-      // Execute query
-      const arr = await getConnection().query(query);
-
-      //let friendIds: Array<string> = [];
-      // Loop through all the id objects and add them to a list,
-      // in order to have a clear json structure for the frontend
-      arr.forEach((userId: { id: any }) => {
-        friendIds.push(userId?.id);
-      });
-    }
-
-    if (friendIds.length === 0) {
-      const d = {
-        stories: [],
-        friendIds: [],
-        hasMore: false,
+      const limit = 11;
+      const stories = await fetchStories(limit, cursor, friendIds);
+      const gifStories = await fetchGifStories(limit, cursor, friendIds);
+      
+      const data = {
+        stories: stories.slice(0, limit).concat(gifStories.slice(0, limit)),
+        friendIds: friendIds,
+        hasMore: (stories.length === limit + 1) ? true : gifStories.length === limit + 1,
       };
-      res.json(d);
-      return;
-    }
-    
-    // Perform request to get friends stories
-    let cursor = 0;
-    if (req.params.cursor) {
-      const nCursor = parseInt(req.params.cursor);
-      if (!Number.isNaN(nCursor)) {
-        cursor = nCursor;
-      }
-    }
-    const limit = 11;
-    const stories = await fetchStories(limit, cursor, friendIds);
 
-    const data = {
-      stories: stories.slice(0, limit),
-      friendIds: friendIds,
-      hasMore: stories.length === limit + 1,
-    };
+      res.json(data);
+    }
+  );
 
-    res.json(data);
-  });
   if (process.env.LATENCY_ON === "true") {
     app.use(function (_req, _res, next) {
       setTimeout(next, Number(process.env.LATENCY_MS));
@@ -262,6 +313,7 @@ const main = async () => {
       });
     }
   });
+
   app.get("/text-story/:id", isAuth(false), async (req: any, res) => {
     const { id } = req.params;
     if (!id || !isUUID.v4(id)) {
@@ -287,19 +339,20 @@ const main = async () => {
       });
     }
   });
+
   app.get("/is-friend/:username", isAuth(), async (req: any, res) => {
     const { username } = req.params;
 
     let found: boolean = false;
     try {
       let user = await User.findOne({ id: req.userId });
-      
-      let result = await octokit.request('GET /users{/username}/following', {
+
+      let result = await octokit.request("GET /users{/username}/following", {
         username: user?.username,
         headers: {
           accept: `application/vnd.github.v3+json`,
           authorization: `token ${user?.githubAccessToken}`,
-        }
+        },
       });
 
       const { data } = result;
@@ -319,6 +372,7 @@ const main = async () => {
       res.send({ ok: false });
     }
   });
+
   app.get("/gif-stories/hot/:cursor?", async (req, res) => {
     let cursor = 0;
     if (req.params.cursor) {
@@ -328,18 +382,8 @@ const main = async () => {
       }
     }
     const limit = 21;
-    const stories = await getConnection().query(`
-      select
-      ts.id,
-      u.username "creatorUsername",
-      u."photoUrl" "creatorAvatarUrl",
-      u.flair
-      from gif_story ts
-      inner join "user" u on u.id = ts."creatorId"
-      order by (ts."numLikes"+1) / power(EXTRACT(EPOCH FROM current_timestamp-ts."createdAt")/3600,1.8) DESC
-      limit ${limit + 1}
-      ${cursor ? `offset ${limit * cursor}` : ""}
-    `);
+
+    const stories = await fetchGifStories(limit, cursor);
 
     const data = {
       stories: stories.slice(0, limit),
@@ -347,27 +391,54 @@ const main = async () => {
     };
     res.json(data);
   });
-  app.get("/text-stories/hot/:cursor?", isAuth(false), async (req: any, res) => {
-    let cursor = 0;
-    if (req.params.cursor) {
-      const nCursor = parseInt(req.params.cursor);
-      if (!Number.isNaN(nCursor)) {
-        cursor = nCursor;
+
+  app.get(
+    "/text-stories/hot/:cursor?",
+    isAuth(false),
+    async (req: any, res) => {
+      let cursor = 0;
+      if (req.params.cursor) {
+        const nCursor = parseInt(req.params.cursor);
+        if (!Number.isNaN(nCursor)) {
+          cursor = nCursor;
+        }
       }
+      const limit = 21;
+
+      const stories = await fetchStories(limit, cursor);
+
+      const data = {
+        stories: stories.slice(0, limit),
+        hasMore: stories.length === limit + 1,
+      };
+      res.json(data);
     }
-    const limit = 21;
+  );
 
-    const stories = await fetchStories(limit, cursor);
+  app.get("/storage/write/:fileId", isAuth(), async (req: any, res) => {
+    const fileId = req.params.fileId;
 
-    const data = {
-      stories: stories.slice(0, limit),
-      hasMore: stories.length === limit + 1,
-    };
-    res.json(data);
+    try {
+      const response = await gcsSignedUrl(gifStoriesBucket, fileId, 5, "write");
+      res.json(response).status(200);
+    } catch (error) {
+      res.send(error.message).status(404);
+    }
   });
 
-  app.post("/delete-gif-story/:id", isAuth(), async (req: any, res) => {
-    const { id } = req.params;
+  app.get("/storage/read/:fileId", isAuth(), async (req: any, res) => {
+    const fileId = req.params.fileId;
+
+    try {
+      const response = await gcsSignedUrl(gifStoriesBucket, fileId, 5, "read");
+      res.json(response).status(200);
+    } catch (error) {
+      res.send(error.message).status(404);
+    }
+  });
+
+  app.post("/delete-gif-story/:id/:mediaId", isAuth(), async (req: any, res) => {
+    const { id, mediaId } = req.params;
     if (!isUUID.v4(id)) {
       res.send({ ok: false });
       return;
@@ -380,6 +451,12 @@ const main = async () => {
     }
 
     await GifStory.delete(criteria);
+    try {
+      await gifStoriesBucket.file(`${mediaId}.gif`).delete();
+    } catch (error) {
+      res.send(error.message).status(404);
+    }
+
     res.send({ ok: true });
   });
 
@@ -400,29 +477,39 @@ const main = async () => {
     res.send({ ok: true });
   });
 
-  app.post("/remove-friend/:username", isAuth(), async (req: any, res, next) => {
-    const { username } = req.params;
+  app.post(
+    "/remove-friend/:username",
+    isAuth(),
+    async (req: any, res, next) => {
+      const { username } = req.params;
 
-    try {
-      let user = await User.findOne({ id: req.userId });
+      try {
+        let user = await User.findOne({ id: req.userId });
 
-      await octokit.request(`DELETE /user/following{/username}`, {
-        username: username,
-        headers: {
-          accept: `application/vnd.github.v3+json`,
-          authorization: `token ${user?.githubAccessToken}`,
+        await octokit.request(`DELETE /user/following{/username}`, {
+          username: username,
+          headers: {
+            accept: `application/vnd.github.v3+json`,
+            authorization: `token ${user?.githubAccessToken}`,
+          },
+        });
+      } catch (err) {
+        console.log(err);
+        if (err.status === 404) {
+          return next(
+            createError(
+              404,
+              "You probably need to reauthenticate in order to follow people"
+            )
+          );
         }
-      });
-    } catch (err) {
-      console.log(err);
-      if (err.status === 404) {
-        return next(createError(404, "You probably need to reauthenticate in order to follow people"));
+        return next(createError(400, "There's no such user"));
       }
-      return next(createError(400, "There's no such user"));
-    }
 
-    res.send({ ok: true });
-  });
+      res.send({ ok: true });
+    }
+  );
+
   app.post("/add-friend/:username", isAuth(), async (req: any, res, next) => {
     const { username } = req.params;
 
@@ -434,12 +521,17 @@ const main = async () => {
         headers: {
           accept: `application/vnd.github.v3+json`,
           authorization: `token ${user?.githubAccessToken}`,
-        }
+        },
       });
     } catch (err) {
       console.log(err);
       if (err.status === 404) {
-        return next(createError(404, "You probably need to reauthenticate in order to follow people"));  
+        return next(
+          createError(
+            404,
+            "You probably need to reauthenticate in order to follow people"
+          )
+        );
       }
       return next(createError(400, "There's no such user"));
     }
@@ -468,11 +560,39 @@ const main = async () => {
       }
     } catch (err) {
       console.log(err);
-      return next(createError(400, "You probably already liked this"));
+      return next(createError(400, "You probably already unliked this"));
     }
 
     res.send({ ok: true });
   });
+
+  app.post("/unlike-gif-story/:id", isAuth(), async (req: any, res, next) => {
+    const { id } = req.params;
+    if (!isUUID.v4(id)) {
+      res.send({ ok: false });
+      return;
+    }
+    try {
+      const currentFavorite = await Favorite.find({
+        gifStoryId: id,
+        userId: req.userId,
+      });
+      if (currentFavorite.length !== 1) return;
+      const { affected } = await Favorite.delete({
+        gifStoryId: id,
+        userId: req.userId,
+      });
+      if (affected) {
+        await GifStory.update(id, { numLikes: () => '"numLikes" - 1' });
+      }
+    } catch (err) {
+      console.log(err);
+      return next(createError(400, "You probably already unliked this"));
+    }
+
+    res.send({ ok: true });
+  });
+
   app.post("/like-text-story/:id", isAuth(), async (req: any, res, next) => {
     const { id } = req.params;
     if (!isUUID.v4(id)) {
@@ -495,6 +615,7 @@ const main = async () => {
 
     res.send({ ok: true });
   });
+
   app.post("/like-gif-story/:id", isAuth(), async (req: any, res, next) => {
     const { id } = req.params;
     if (!isUUID.v4(id)) {
@@ -502,6 +623,11 @@ const main = async () => {
       return;
     }
     try {
+      const currentFavorite = await Favorite.find({
+        gifStoryId: id,
+        userId: req.userId,
+      });
+      if (currentFavorite.length !== 0) return;
       await Favorite.insert({ gifStoryId: id, userId: req.userId });
     } catch (err) {
       console.log(err);
@@ -516,6 +642,7 @@ const main = async () => {
   app.post("/like-story/:id/:username", async (_req, _res, next) => {
     return next(createError(400, upgradeMessage));
   });
+
   const maxTextLength = 20000;
   app.post(
     "/new-text-story",
@@ -566,29 +693,22 @@ const main = async () => {
       max: 10,
       headers: false,
     }),
-    async (req, res, next) => {
-      let { token, programmingLanguageId } = req.body;
+    async (req, res) => {
+      //add next here for error
+      let { programmingLanguageId, filename, mediaId } = req.body;
       if (programmingLanguageId.length > 40) {
         programmingLanguageId = null;
       }
-      let filename: string = "";
+
+      // Flagged was coming from vision ML which we don't have on serverless
+      // We can update flag if user is reported through ban system
+
       let flagged = null;
-      try {
-        const payload: any = jwt.verify(token, process.env.TOKEN_SECRET);
-        filename = payload.filename;
-        flagged = payload.flagged;
-      } catch (err) {
-        console.log("tokenErr: ", err);
-        return next(createError(400, "something went wrong uploading gif"));
-      }
-      if (!filename) {
-        return next(
-          createError(400, "something went really wrong uploading gif")
-        );
-      }
+
       // @todo if flagged ping me on slack
       const gs = await GifStory.create({
-        mediaId: filename,
+        mediaId,
+        filename,
         flagged,
         programmingLanguageId,
         creatorId: (req as any).userId,
@@ -597,9 +717,9 @@ const main = async () => {
 
       res.send({
         id: gs.id,
-        creatorUsername: currentUser.username,
-        mediaId: filename,
+        mediaId: mediaId,
         creatorAvatarUrl: currentUser.photoUrl,
+        creatorUsername: currentUser.username,
         flair: currentUser.flair,
       });
     }

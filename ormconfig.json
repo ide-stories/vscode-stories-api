@@ -5,5 +5,10 @@
   "database": "stories",
   "entities": ["src/entities/**/*.ts"],
   "migrations": ["src/migrations/**/*.ts"],
-  "subscribers": ["src/subscriber/**/*.ts"]
+  "subscribers": ["src/subscriber/**/*.ts"],
+  "cli": {
+    "entities": ["src/entities"],
+    "migrations": ["src/migrations"],
+    "subscribers": ["src/subscriber"]
+  }
 }
