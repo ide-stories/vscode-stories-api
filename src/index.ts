@@ -21,7 +21,7 @@ import { TextStory } from "./entities/TextStory";
 import { User } from "./entities/User";
 import { isAuth } from "./isAuth";
 import { Octokit } from "@octokit/rest";
-import { fetchGifStories, fetchStories, fetchUserStories } from "./queryBuilder";
+import { fetchGifStories, fetchStories, fetchUserGifStories, fetchUserStories } from "./queryBuilder";
 import { Bucket, GetSignedUrlConfig, Storage } from "@google-cloud/storage";
 import path from "path";
 const octokit = new Octokit();
@@ -170,7 +170,7 @@ const main = async () => {
     );
   });
   
-  app.get("/user/text-stories/:cursor?", isAuth(), async (req: any, res) => {
+  app.get("/stories/user/:cursor?", isAuth(), async (req: any, res) => {
     let cursor = 0;
     if (req.params.cursor) {
       const nCursor = parseInt(req.params.cursor);
@@ -178,13 +178,14 @@ const main = async () => {
         cursor = nCursor;
       }
     }
-    const limit = 10;
 
+    const limit = 5;
     const stories = await fetchUserStories(limit, cursor, req.userId);
+    const gifStories = await fetchUserGifStories(limit, cursor, req.userId);
 
     const data = {
-      stories: stories.slice(0, limit),
-      hasMore: stories.length === limit + 1,
+      stories: stories.slice(0, limit).concat(gifStories.slice(0, limit)),
+      hasMore: (stories.length === limit + 1) ? true : gifStories.length === limit + 1,
     };
     res.json(data);
   });
